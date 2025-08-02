@@ -3,9 +3,11 @@ import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-import os
 from typing import List, Dict, Any
+from pathlib import Path
 
+# Resolve paths relative to the project root so scripts work from any CWD
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 BASE_URL = "https://th.sportscorpion.com"
 
 def fetch_page(session, url: str) -> BeautifulSoup:
@@ -76,7 +78,7 @@ def process_player(session, player_id: int) -> Dict[str, Any]:
             'Sex': ''
         }
 
-def get_unique_player_ids(parquet_file_path: str) -> List[int]:
+def get_unique_player_ids(parquet_file_path: Path) -> List[int]:
     """
     Extract unique player IDs from the matches data.
     
@@ -86,7 +88,7 @@ def get_unique_player_ids(parquet_file_path: str) -> List[int]:
     Returns:
         List of unique player IDs
     """
-    if not os.path.exists(parquet_file_path):
+    if not parquet_file_path.exists():
         print(f"File {parquet_file_path} not found!")
         return []
     
@@ -106,7 +108,7 @@ def get_unique_player_ids(parquet_file_path: str) -> List[int]:
     print(f"Found {len(unique_player_ids)} unique player IDs")
     return unique_player_ids
 
-def scrape_all_players(player_ids: List[int], output_file: str = "players_data.csv") -> pd.DataFrame:
+def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "players_data.csv") -> pd.DataFrame:
     """
     Scrape information for all players in parallel.
     
@@ -119,7 +121,7 @@ def scrape_all_players(player_ids: List[int], output_file: str = "players_data.c
     """
     # Check if output file exists and load existing data
     existing_players = set()
-    if os.path.exists(output_file):
+    if output_file.exists():
         existing_df = pd.read_csv(output_file)
         existing_players = set(existing_df['PlayerID'].astype(int))
         print(f"Found {len(existing_players)} existing players in {output_file}")
@@ -159,7 +161,7 @@ def scrape_all_players(player_ids: List[int], output_file: str = "players_data.c
     new_players_df = pd.DataFrame(players_data)
     
     # Combine with existing data if it exists
-    if os.path.exists(output_file):
+    if output_file.exists():
         combined_df = pd.concat([existing_df, new_players_df], ignore_index=True)
         # Remove duplicates based on PlayerID
         combined_df.drop_duplicates(subset=['PlayerID'], keep='last', inplace=True)
@@ -175,9 +177,12 @@ def scrape_all_players(player_ids: List[int], output_file: str = "players_data.c
 
 def main():
     """Main execution function"""
+    # Ensure data directory exists
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     # File paths
-    matches_file = "scraped_matches.parquet"
-    players_file = "players_data.csv"
+    matches_file = DATA_DIR / "scraped_matches.parquet"
+    players_file = DATA_DIR / "players_data.csv"
     
     print("Extracting unique player IDs from matches data...")
     unique_player_ids = get_unique_player_ids(matches_file)
@@ -201,4 +206,4 @@ def main():
         print(f"Players with sex info: {players_df['Sex'].notna().sum()}")
 
 if __name__ == "__main__":
-    main() 
+    main()

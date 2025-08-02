@@ -4,13 +4,15 @@ import logging
 import time
 import csv
 from typing import List, Dict, Optional, Set
-import os
+from pathlib import Path
 
 # Configuration
 BASE_URL = "https://th.sportscorpion.com/eng/tournament/archive/?page="
 TOURNAMENT_BASE = "https://th.sportscorpion.com"
 MAX_PAGES = 5 # since the script runs daily, it only needs to go through the newest tournaments
-OUTPUT_FILE = "tournament_data.csv"
+# Resolve paths relative to the project root so scripts work from any CWD
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+OUTPUT_FILE = DATA_DIR / "tournament_data.csv"
 RETRY_LIMIT = 3
 RETRY_DELAY = 0  # seconds
 
@@ -82,19 +84,20 @@ def get_tournament_type(detail_url: str) -> str:
     print("\n--- END DEBUG ---\n")
     return ''
 
-def read_existing_ids(filename: str) -> Set[str]:
-    ids = set()
-    if not os.path.exists(filename):
+def read_existing_ids(filename: Path) -> Set[str]:
+    ids: Set[str] = set()
+    if not filename.exists():
         return ids
-    with open(filename, 'r', encoding='utf-8') as csvfile:
+    with filename.open('r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             ids.add(row['ID'])
     return ids
 
-def append_tournaments_to_csv(filename: str, tournaments: List[Dict[str, str]]):
-    file_exists = os.path.exists(filename)
-    with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
+def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]]):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    file_exists = filename.exists()
+    with filename.open('a', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'])
         if not file_exists:
             writer.writeheader()
