@@ -32,6 +32,19 @@ python scorpion_scraper/scrape_players.py
 python scorpion_scraper/scrape_tournament_urls.py
 ```
 
+To execute the scrapers in the required order (tournaments → matches → players),
+run the helper script:
+
+```bash
+python scorpion_scraper/nightly_scrape.py
+```
+
+This script can be scheduled to run automatically each night using `cron`:
+
+```
+0 2 * * * /usr/bin/python /path/to/Scorpion-Scraper-2.0/scorpion_scraper/nightly_scrape.py >> /path/to/nightly.log 2>&1
+```
+
 ## Data Output
 - Scraped data is saved in the `data/` directory as CSV or Parquet files.
 
