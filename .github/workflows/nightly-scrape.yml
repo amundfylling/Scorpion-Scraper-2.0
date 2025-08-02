@@ -1,0 +1,17 @@
+name: Nightly Scrape
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # kjører hver dag kl 00:00 UTC
+  workflow_dispatch:       # lar deg trigge jobben manuelt fra GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      - run: pip install -r requirements.txt
+      - run: python scorpion_scraper/nightly_scrape.py
