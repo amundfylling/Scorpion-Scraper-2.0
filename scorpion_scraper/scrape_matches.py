@@ -5,8 +5,11 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import List, Tuple
-import os
+from pathlib import Path
 
+# Resolve paths relative to the project root so scripts work from any CWD
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
 BASE_URL = "https://th.sportscorpion.com"
 
 # Mapping of playoff stage names to fraction values
@@ -338,7 +341,7 @@ def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[s
     return df
 
 # Read tournament data from CSV and filter for Individual tournaments
-def get_individual_tournament_urls(csv_file_path: str) -> List[str]:
+def get_individual_tournament_urls(csv_file_path: Path) -> List[str]:
     """
     Read tournament data from CSV file and return URLs for Individual tournaments only.
     """
@@ -359,15 +362,18 @@ def get_individual_tournament_urls(csv_file_path: str) -> List[str]:
 
 # Main execution
 if __name__ == "__main__":
+    # Ensure data directory exists
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     # Get tournament URLs from CSV file
-    csv_file_path = "tournament_data.csv"
+    csv_file_path = DATA_DIR / "tournament_data.csv"
     tournament_urls = get_individual_tournament_urls(csv_file_path)
 
     # Parquet output file
-    output_file = "scraped_matches.parquet"
+    output_file = DATA_DIR / "scraped_matches.parquet"
 
     # Determine already scraped TournamentIDs
-    if os.path.exists(output_file):
+    if output_file.exists():
         existing_df = pd.read_parquet(output_file)
         scraped_ids = set(existing_df["TournamentID"].dropna().astype(str).unique())
     else:
@@ -389,7 +395,7 @@ if __name__ == "__main__":
         print(f"DataFrame shape: {df.shape}")
 
         # Append to Parquet (or create new)
-        if os.path.exists(output_file):
+        if output_file.exists():
             combined_df = pd.concat([existing_df, df], ignore_index=True)
             # Drop duplicates based on TournamentID, StageID, Player1ID, Player2ID, GoalsPlayer1, GoalsPlayer2, Date
             combined_df.drop_duplicates(subset=["TournamentID", "StageID", "Player1ID", "Player2ID", "GoalsPlayer1", "GoalsPlayer2", "Date"], inplace=True)
