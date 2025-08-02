@@ -1,4 +1,6 @@
 pandas
 requests
 beautifulsoup4
-tqdm 
+tqdm
+lxml
+pyarrow
