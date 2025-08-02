@@ -120,7 +120,8 @@ def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "pl
         DataFrame containing all player information
     """
     # Check if output file exists and load existing data
-    existing_players = set()
+    existing_players: set[int] = set()
+    existing_df = pd.DataFrame()
     if output_file.exists():
         existing_df = pd.read_csv(output_file)
         existing_players = set(existing_df['PlayerID'].astype(int))
@@ -132,7 +133,7 @@ def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "pl
     
     if not new_player_ids:
         print("No new players to scrape!")
-        return existing_df if os.path.exists(output_file) else pd.DataFrame()
+        return existing_df
     
     # Set up session with headers
     headers = {'User-Agent': 'Mozilla/5.0'}

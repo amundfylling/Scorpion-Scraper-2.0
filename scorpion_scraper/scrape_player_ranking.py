@@ -68,4 +68,4 @@ if __name__ == "__main__":
     url = "https://stiga.trefik.cz/ithf/ranking/rankpl.aspx?pl=655257"
     df = scrape_player_ranking(url)
     print(df.head(20))
-    print(df.tail(20)) 
+    print(df.tail(20))
