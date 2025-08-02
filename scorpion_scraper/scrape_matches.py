@@ -272,7 +272,7 @@ def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[s
                         match[6],  # GoalsPlayer2
                         match[7],  # Overtime
                         match[8],  # Stage
-                        match[9],  # RoroundNumber
+                        match[9],  # RoundNumber
                         match[10],  # PlayoffGameNumber
                         date,
                         tournament_name,
@@ -404,4 +404,4 @@ if __name__ == "__main__":
             df.to_parquet(output_file, index=False)
         print(f"Matches saved to {output_file}")
     else:
-        print("No new tournaments to scrape.") 
+        print("No new tournaments to scrape.")
