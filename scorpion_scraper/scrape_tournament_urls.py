@@ -9,7 +9,7 @@ import os
 # Configuration
 BASE_URL = "https://th.sportscorpion.com/eng/tournament/archive/?page="
 TOURNAMENT_BASE = "https://th.sportscorpion.com"
-MAX_PAGES = 300  # Set to 300 for full scrape, 10 for incremental
+MAX_PAGES = 5 # since the script runs daily, it only needs to go through the newest tournaments
 OUTPUT_FILE = "tournament_data.csv"
 RETRY_LIMIT = 3
 RETRY_DELAY = 0  # seconds
