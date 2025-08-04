@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
+from tqdm import tqdm
 
 
 def scrape_player_ranking(player_url: str) -> pd.DataFrame:
@@ -63,9 +64,67 @@ def scrape_player_ranking(player_url: str) -> pd.DataFrame:
     return df
 
 
-if __name__ == "__main__":
-    # Example usage
-    url = "https://stiga.trefik.cz/ithf/ranking/rankpl.aspx?pl=655257"
+def scrape_player_ranking_by_id(ranking_id: int) -> pd.DataFrame:
+    """Scrape ranking history for a player given their ranking ID.
+
+    Returns a DataFrame with columns ['RankingID', 'Date', 'Rank', 'Points'].
+    """
+    url = f"https://stiga.trefik.cz/ithf/ranking/rankpl.aspx?pl={ranking_id}"
     df = scrape_player_ranking(url)
-    print(df.head(20))
-    print(df.tail(20))
+    df["RankingID"] = int(ranking_id)
+    df["Date"] = pd.to_datetime(
+        df["year"].astype(str) + "-" + df["month"],
+        format="%Y-%b",
+        errors="coerce",
+    )
+    return df[["RankingID", "Date", "rank", "points"]].rename(
+        columns={"rank": "Rank", "points": "Points"}
+    )
+
+
+def scrape_rankings_for_players(players_csv: str, output_csv: str) -> pd.DataFrame:
+    """Scrape ranking histories for all players listed in ``players_csv``.
+
+    The input CSV must contain a ``RankingID`` column. The combined ranking
+    history is written to ``output_csv`` and also returned as a DataFrame.
+    """
+    players = pd.read_csv(players_csv)
+    ranking_ids = (
+        players["RankingID"].dropna().astype(float).astype(int).unique().tolist()
+    )
+
+    all_rankings = []
+    for rid in tqdm(ranking_ids, desc="Scraping player rankings"):
+        try:
+            player_df = scrape_player_ranking_by_id(rid)
+            all_rankings.append(player_df)
+        except Exception as exc:  # noqa: BLE001 - we log and continue
+            print(f"Failed to scrape ranking {rid}: {exc}")
+
+    if all_rankings:
+        rankings_df = pd.concat(all_rankings, ignore_index=True)
+    else:
+        rankings_df = pd.DataFrame(columns=["RankingID", "Date", "Rank", "Points"])
+    rankings_df.to_csv(output_csv, index=False)
+    return rankings_df
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Scrape player ranking histories and save to CSV."
+    )
+    parser.add_argument(
+        "--players-csv",
+        default="data/players_data.csv",
+        help="Input CSV containing player information including a RankingID column.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        default="data/player_ranking_history.csv",
+        help="Destination CSV file for combined ranking history.",
+    )
+    args = parser.parse_args()
+
+    scrape_rankings_for_players(args.players_csv, args.output_csv)
