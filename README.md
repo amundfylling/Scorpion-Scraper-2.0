@@ -30,6 +30,7 @@ Run the desired scraper script from the `scorpion_scraper` directory. For exampl
 python scorpion_scraper/scrape_matches.py
 python scorpion_scraper/scrape_players.py
 python scorpion_scraper/scrape_tournament_urls.py
+python scorpion_scraper/scrape_ranking_history.py
 ```
 
 To execute the scrapers in the required order (tournaments → matches → players),
