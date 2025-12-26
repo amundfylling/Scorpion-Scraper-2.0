@@ -237,15 +237,17 @@ def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[s
             # Extract the stages and their sequences
             stage_rows = tournament_soup.select('table.stages-table tr')
             stage_data = []
+            current_stage_sequence = None
             for row in stage_rows:
                 seq_cell = row.select_one('td.stage-gr')
                 if seq_cell:
-                    stage_sequence = seq_cell.get_text(strip=True)
-                    sched_link = row.select_one('a:-soup-contains("Schedule and results")')
-                    if sched_link:
-                        stage_url = f"{BASE_URL}{sched_link['href']}?print"
-                        stage_id = stage_url.split('/')[-3]
-                        stage_data.append((stage_id, stage_url, stage_sequence))
+                    current_stage_sequence = seq_cell.get_text(strip=True)
+                sched_link = row.select_one('a:-soup-contains("Schedule and results")')
+                if not sched_link:
+                    continue
+                stage_url = f"{BASE_URL}{sched_link['href']}?print"
+                stage_id = stage_url.split('/')[-3]
+                stage_data.append((stage_id, stage_url, current_stage_sequence))
 
             stage_matches = []
             for stage_id, stage_url, stage_sequence in stage_data:
