@@ -4,7 +4,13 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import List, Dict, Any
+import logging
 from pathlib import Path
+
+try:
+    from . import utils
+except ImportError:
+    import utils
 
 # Resolve paths relative to the project root so scripts work from any CWD
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -67,7 +73,7 @@ def process_player(session, player_id: int) -> Dict[str, Any]:
             'Sex': sex
         }
     except Exception as e:
-        print(f"Error processing player {player_id}: {e}")
+        logging.error(f"Error processing player {player_id}: {e}")
         return {
             'PlayerID': player_id,
             'Name': '',
@@ -89,7 +95,7 @@ def get_unique_player_ids(parquet_file_path: Path) -> List[int]:
         List of unique player IDs
     """
     if not parquet_file_path.exists():
-        print(f"File {parquet_file_path} not found!")
+        logging.error(f"File {parquet_file_path} not found!")
         return []
     
     # Read the parquet file
@@ -105,7 +111,7 @@ def get_unique_player_ids(parquet_file_path: Path) -> List[int]:
     # Convert to list and sort
     unique_player_ids = sorted(list(all_player_ids))
     
-    print(f"Found {len(unique_player_ids)} unique player IDs")
+    logging.info(f"Found {len(unique_player_ids)} unique player IDs")
     return unique_player_ids
 
 def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "players_data.csv") -> pd.DataFrame:
@@ -125,14 +131,14 @@ def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "pl
     if output_file.exists():
         existing_df = pd.read_csv(output_file)
         existing_players = set(existing_df['PlayerID'].astype(int))
-        print(f"Found {len(existing_players)} existing players in {output_file}")
+        logging.info(f"Found {len(existing_players)} existing players in {output_file}")
     
     # Filter out already scraped players
     new_player_ids = [pid for pid in player_ids if pid not in existing_players]
-    print(f"Need to scrape {len(new_player_ids)} new players")
+    logging.info(f"Need to scrape {len(new_player_ids)} new players")
     
     if not new_player_ids:
-        print("No new players to scrape!")
+        logging.info("No new players to scrape!")
         return existing_df
     
     # Set up session with headers
@@ -145,8 +151,9 @@ def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "pl
     progress_bar = tqdm(total=len(new_player_ids), desc="Processing Players", unit="player")
     
     # Using ThreadPoolExecutor for parallel processing
+    # Using ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=5) as executor:
-        with requests.Session() as session:
+        with utils.get_retry_session() as session:
             session.headers.update(headers)
             future_to_id = {executor.submit(process_player, session, player_id): player_id for player_id in new_player_ids}
             
@@ -172,12 +179,13 @@ def scrape_all_players(player_ids: List[int], output_file: Path = DATA_DIR / "pl
     
     # Save the combined DataFrame
     combined_df.to_csv(output_file, index=False, encoding='utf-8-sig')
-    print(f"Saved {len(combined_df)} players to {output_file}")
+    logging.info(f"Saved {len(combined_df)} players to {output_file}")
     
     return combined_df
 
 def main():
     """Main execution function"""
+    utils.setup_logging()
     # Ensure data directory exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -185,26 +193,26 @@ def main():
     matches_file = DATA_DIR / "scraped_matches.parquet"
     players_file = DATA_DIR / "players_data.csv"
     
-    print("Extracting unique player IDs from matches data...")
+    logging.info("Extracting unique player IDs from matches data...")
     unique_player_ids = get_unique_player_ids(matches_file)
     
     if not unique_player_ids:
-        print("No player IDs found!")
+        logging.info("No player IDs found!")
         return
     
-    print(f"Scraping information for {len(unique_player_ids)} unique players...")
+    logging.info(f"Scraping information for {len(unique_player_ids)} unique players...")
     players_df = scrape_all_players(unique_player_ids, players_file)
     
-    print("Player scraping completed!")
-    print(f"Total players in database: {len(players_df)}")
+    logging.info("Player scraping completed!")
+    logging.info(f"Total players in database: {len(players_df)}")
     
     # Display some statistics
     if not players_df.empty:
-        print("\nPlayer Statistics:")
-        print(f"Players with country info: {players_df['Country'].notna().sum()}")
-        print(f"Players with city info: {players_df['City'].notna().sum()}")
-        print(f"Players with birth date: {players_df['DateOfBirth'].notna().sum()}")
-        print(f"Players with sex info: {players_df['Sex'].notna().sum()}")
+        logging.info("\nPlayer Statistics:")
+        logging.info(f"Players with country info: {players_df['Country'].notna().sum()}")
+        logging.info(f"Players with city info: {players_df['City'].notna().sum()}")
+        logging.info(f"Players with birth date: {players_df['DateOfBirth'].notna().sum()}")
+        logging.info(f"Players with sex info: {players_df['Sex'].notna().sum()}")
 
 if __name__ == "__main__":
     main()

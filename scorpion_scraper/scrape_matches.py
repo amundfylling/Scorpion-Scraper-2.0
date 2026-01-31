@@ -6,6 +6,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import List, Tuple
 from pathlib import Path
+import logging
+import argparse
+
+try:
+    from . import utils
+except ImportError:
+    import utils
 
 # Resolve paths relative to the project root so scripts work from any CWD
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -206,7 +213,7 @@ def get_match_info(session, url: str) -> List[Tuple[str, str, str, str, str, int
                             )
                         )
                     except ValueError:
-                        print(f"Unable to parse score '{score_cleaned}' from match {url}")
+                        logging.warning(f"Unable to parse score '{score_cleaned}' from match {url}")
 
     return match_info
 
@@ -215,7 +222,7 @@ def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[s
     headers = {'User-Agent': 'Mozilla/5.0'}
 
     def fetch_tournament_data(url):
-        with requests.Session() as session:
+        with utils.get_retry_session() as session:
             session.headers.update(headers)
             tournament_id = url.split('/')[-2]
             tournament_url = f"{BASE_URL}/eng/tournament/id/{tournament_id}/"
@@ -296,7 +303,7 @@ def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[s
                 processed_tournaments += 1
                 tqdm.write(f"\rProcessed tournaments: {processed_tournaments}", end='')
             except Exception as exc:
-                print(f'{url} generated an exception: {exc}')
+                logging.error(f'{url} generated an exception: {exc}')
 
     # Build DataFrame
     df = pd.DataFrame(
@@ -359,11 +366,17 @@ def get_individual_tournament_urls(csv_file_path: Path) -> List[str]:
         url = f"{BASE_URL}/eng/tournament/id/{tournament_id}/"
         tournament_urls.append(url)
     
-    print(f"Found {len(individual_tournaments)} Individual tournaments out of {len(df)} total tournaments")
+    logging.info(f"Found {len(individual_tournaments)} Individual tournaments out of {len(df)} total tournaments")
     return tournament_urls
 
 # Main execution
 if __name__ == "__main__":
+    utils.setup_logging()
+    
+    parser = argparse.ArgumentParser(description="Scrape matches.")
+    parser.add_argument("--full", action="store_true", help="Run a full scrape (all tournaments) and overwrite existing data. Default is incremental.")
+    args = parser.parse_args()
+
     # Ensure data directory exists
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -375,35 +388,44 @@ if __name__ == "__main__":
     output_file = DATA_DIR / "scraped_matches.parquet"
 
     # Determine already scraped TournamentIDs
-    if output_file.exists():
+    scraped_ids = set()
+    if args.full:
+        logging.info("FULL SCRAPE MODE: Ignoring existing data. Will look at all tournaments.")
+    elif output_file.exists():
         existing_df = pd.read_parquet(output_file)
         scraped_ids = set(existing_df["TournamentID"].dropna().astype(str).unique())
-    else:
-        scraped_ids = set()
+        logging.info(f"INCREMENTAL MODE: Found {len(scraped_ids)} already scraped tournaments.")
 
     # Filter tournament URLs to only those not already scraped
     def extract_id_from_url(url):
         return url.rstrip("/").split("/")[-1]
-    tournament_urls_to_scrape = [url for url in tournament_urls if extract_id_from_url(url) not in scraped_ids]
+    
+    if args.full:
+        tournament_urls_to_scrape = tournament_urls
+    else:
+        tournament_urls_to_scrape = [url for url in tournament_urls if extract_id_from_url(url) not in scraped_ids]
 
     num_skipped = len(tournament_urls) - len(tournament_urls_to_scrape)
-    print(f"Skipping {num_skipped} tournaments already scraped out of {len(tournament_urls)} total. {len(tournament_urls_to_scrape)} left to scrape.")
+    logging.info(f"Skipping {num_skipped} tournaments already scraped out of {len(tournament_urls)} total. {len(tournament_urls_to_scrape)} left to scrape.")
 
-    print(f"Scraping {len(tournament_urls_to_scrape)} tournaments (after filtering and limiting)")
+    logging.info(f"Scraping {len(tournament_urls_to_scrape)} tournaments (after filtering and limiting)")
 
     if tournament_urls_to_scrape:
         df = get_tournament_matches(tournament_urls_to_scrape, existing_stage_ids=set())
-        print(f"Total matches scraped: {len(df)}")
-        print(f"DataFrame shape: {df.shape}")
+        logging.info(f"Total matches scraped: {len(df)}")
+        logging.info(f"DataFrame shape: {df.shape}")
 
         # Append to Parquet (or create new)
-        if output_file.exists():
+        if output_file.exists() and not args.full:
+            # Incremental append
             combined_df = pd.concat([existing_df, df], ignore_index=True)
             # Drop duplicates based on TournamentID, StageID, Player1ID, Player2ID, GoalsPlayer1, GoalsPlayer2, Date
             combined_df.drop_duplicates(subset=["TournamentID", "StageID", "Player1ID", "Player2ID", "GoalsPlayer1", "GoalsPlayer2", "Date"], inplace=True)
             combined_df.to_parquet(output_file, index=False)
+            logging.info(f"Appended matches to {output_file}")
         else:
+            # Full overwrite or new file
             df.to_parquet(output_file, index=False)
-        print(f"Matches saved to {output_file}")
+            logging.info(f"Saved (overwritten) matches to {output_file}")
     else:
-        print("No new tournaments to scrape.")
+        logging.info("No new tournaments to scrape.")

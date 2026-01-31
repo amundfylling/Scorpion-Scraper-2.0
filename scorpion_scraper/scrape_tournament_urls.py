@@ -1,10 +1,16 @@
 import requests
 from bs4 import BeautifulSoup
+import argparse
 import logging
 import time
 import csv
 from typing import List, Dict, Optional, Set
 from pathlib import Path
+
+try:
+    from . import utils
+except ImportError:
+    import utils
 
 # Configuration
 BASE_URL = "https://th.sportscorpion.com/eng/tournament/archive/?page="
@@ -13,24 +19,19 @@ MAX_PAGES = 5 # since the script runs daily, it only needs to go through the new
 # Resolve paths relative to the project root so scripts work from any CWD
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 OUTPUT_FILE = DATA_DIR / "tournament_data.csv"
-RETRY_LIMIT = 3
-RETRY_DELAY = 0  # seconds
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+utils.setup_logging()
+# Global session with retries
+SESSION = utils.get_retry_session()
 
-def fetch_page(url: str, retries: int = RETRY_LIMIT) -> Optional[requests.Response]:
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                return response
-            else:
-                logging.warning(f"Non-200 status code {response.status_code} for URL: {url}")
-                break
-        except requests.RequestException as e:
-            logging.warning(f"Request failed for {url} (attempt {attempt+1}/{retries}): {e}")
-            time.sleep(RETRY_DELAY)
-    return None
+def fetch_page(url: str) -> Optional[requests.Response]:
+    try:
+        response = SESSION.get(url, timeout=15)
+        response.raise_for_status()
+        return response
+    except requests.RequestException as e:
+        logging.warning(f"Request failed for {url}: {e}")
+        return None
 
 def parse_tournaments_from_overview(soup: BeautifulSoup) -> List[Dict[str, str]]:
     tournaments = []
@@ -105,9 +106,22 @@ def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]])
             writer.writerow(t)
 
 def main():
+    parser = argparse.ArgumentParser(description="Scrape tournament URLs.")
+    parser.add_argument("--full", action="store_true", help="Run a full scrape (all pages). Default is incremental (5 pages).")
+    args = parser.parse_args()
+
     # Pass 1: Collect all tournaments from overview pages
     all_tournaments = []
-    for page_num in range(1, MAX_PAGES + 1):
+    
+    # Determine page range
+    if args.full:
+        logging.info("Starting FULL scrape of tournament URLs.")
+        page_range = range(1, 10000) # Effectively infinite for this context
+    else:
+        logging.info(f"Starting INCREMENTAL scrape of tournament URLs (max {MAX_PAGES} pages).")
+        page_range = range(1, MAX_PAGES + 1)
+
+    for page_num in page_range:
         page_url = BASE_URL + str(page_num)
         response = fetch_page(page_url)
         if not response:
@@ -123,8 +137,23 @@ def main():
     logging.info(f"Collected {len(all_tournaments)} tournaments from overview pages.")
 
     # Pass 2: Only fetch type for tournaments not in CSV
+    # If full scrape, we might want to re-check types?
+    # The requirement says "overwrite the current table" for matches, but for URLs it implies fetching all.
+    # However, for robustness, if we already have the type, we might blindly trust it unless "overwrite" is strictly required here too.
+    # Let's keep logic: if ID exists, skip. If full scrape, maybe we should NOT skip?
+    # The user said "overwrite the current table" in the context of "full scrape".
+    # For tournament_urls.py, "incremental" means append new ones. "Full" usually means "ensure everything is there".
+    # If we want to strictly overwrite, we should clear the CSV or ignore existing.
+    
+    # Current implementation reads existing IDs to know what to skip.
+    # If full scrape, we should probably re-verify types OR just ensure we have them all.
+    # Since checking type requires a request per tournament, re-checking ALL 6000 tournaments is expensive.
+    # I will assume "Full" here mainly applies to *finding* potentially missed tournaments from older pages.
+    # But for matches, it explicitly says "overwrite".
+    
     existing_ids = read_existing_ids(OUTPUT_FILE)
     new_tournaments = []
+    
     for t in all_tournaments:
         if t['ID'] in existing_ids:
             continue  # Skip already collected

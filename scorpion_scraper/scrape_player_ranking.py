@@ -3,13 +3,17 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import re
 
+try:
+    from . import utils
+except ImportError:
+    import utils
 
 def scrape_player_ranking(player_url: str) -> pd.DataFrame:
     """
     Scrape the ranking history of a player from the given URL and return as a DataFrame.
     Columns: ['year', 'month', 'rank', 'points']
     """
-    response = requests.get(player_url)
+    response = utils.get_retry_session().get(player_url)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
 
