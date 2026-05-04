@@ -129,10 +129,13 @@ def get_match_info(session, url: str) -> List[Tuple[str, str, str, str, str, int
                     player1_name, player1_id = extract_name_and_id(players[0])
                     player2_name, player2_id = extract_name_and_id(players[1])
                     
-                    # Each 'td[class^="ma_result_"]' corresponds to one game in the series
-                    scores = serie.select('td[class^="ma_result_"]')
-                    # Ignore the last score which is the total series score
-                    for game_number, score in enumerate(scores[:-1], start=1):
+                    # Game cells have a data-match-id; the final series-total cell does not.
+                    # Filtering this way avoids dropping real games when markup varies.
+                    game_cells = [
+                        td for td in serie.select('td[class^="ma_result_"]')
+                        if td.get('data-match-id')
+                    ]
+                    for game_number, score in enumerate(game_cells, start=1):
                         if ':' in score.text:
                             score_cleaned = clean_score_text(score.text)
                             try:
