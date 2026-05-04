@@ -419,8 +419,23 @@ if __name__ == "__main__":
         if output_file.exists() and not args.full:
             # Incremental append
             combined_df = pd.concat([existing_df, df], ignore_index=True)
-            # Drop duplicates based on TournamentID, StageID, Player1ID, Player2ID, GoalsPlayer1, GoalsPlayer2, Date
-            combined_df.drop_duplicates(subset=["TournamentID", "StageID", "Player1ID", "Player2ID", "GoalsPlayer1", "GoalsPlayer2", "Date"], inplace=True)
+            # Drop duplicates while preserving distinct playoff games within the same series.
+            # Without PlayoffGameNumber (and RoundNumber for round-robin context), repeated
+            # scores like game 1 and game 3 both ending 2:3 were incorrectly collapsed.
+            combined_df.drop_duplicates(
+                subset=[
+                    "TournamentID",
+                    "StageID",
+                    "Player1ID",
+                    "Player2ID",
+                    "GoalsPlayer1",
+                    "GoalsPlayer2",
+                    "Date",
+                    "RoundNumber",
+                    "PlayoffGameNumber",
+                ],
+                inplace=True,
+            )
             combined_df.to_parquet(output_file, index=False)
             logging.info(f"Appended matches to {output_file}")
         else:
