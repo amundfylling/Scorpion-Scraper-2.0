@@ -2,15 +2,17 @@ import requests
 from bs4 import BeautifulSoup
 import argparse
 import logging
-import time
 import csv
-from typing import List, Dict, Optional, Set
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Set, Tuple
 from pathlib import Path
 
 try:
     from . import utils
+    from . import tournament_metadata
 except ImportError:
     import utils
+    import tournament_metadata
 
 # Configuration
 BASE_URL = "https://th.sportscorpion.com/eng/tournament/archive/?page="
@@ -19,16 +21,13 @@ MAX_PAGES = 5 # since the script runs daily, it only needs to go through the new
 # Resolve paths relative to the project root so scripts work from any CWD
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 OUTPUT_FILE = DATA_DIR / "tournament_data.csv"
+METADATA_FILE = DATA_DIR / "tournament_metadata.csv"
 
 utils.setup_logging()
-# Global session with retries
-SESSION = utils.get_retry_session()
 
-def fetch_page(url: str) -> Optional[requests.Response]:
+def fetch_page(url: str, session: requests.Session) -> Optional[requests.Response]:
     try:
-        response = SESSION.get(url, timeout=15)
-        response.raise_for_status()
-        return response
+        return utils.get_with_status(session, url)
     except requests.RequestException as e:
         logging.warning(f"Request failed for {url}: {e}")
         return None
@@ -60,40 +59,40 @@ def parse_tournaments_from_overview(soup: BeautifulSoup) -> List[Dict[str, str]]
             })
     return tournaments
 
+def get_tournament_details(tournament: Dict[str, str]) -> Optional[Tuple[Dict[str, str], Dict[str, str]]]:
+    with utils.get_retry_session() as session:
+        response = fetch_page(tournament['DetailURL'], session)
+        if not response:
+            return None
+    soup = BeautifulSoup(response.text, 'lxml')
+    metadata_row = tournament_metadata.parse_tournament_metadata(
+        soup,
+        tournament['DetailURL'],
+        fallback_id=tournament['ID'],
+        fallback_name=tournament['Name'],
+    )
+    return tournament_metadata.catalog_row_from_metadata(metadata_row), metadata_row
+
 def get_tournament_type(detail_url: str) -> str:
-    response = fetch_page(detail_url)
-    if not response:
+    details = get_tournament_details({
+        'ID': tournament_metadata.extract_tournament_id(detail_url),
+        'Name': '',
+        'DetailURL': detail_url,
+    })
+    if not details:
         return ''
-    soup = BeautifulSoup(response.text, 'html.parser')
-    tables = soup.find_all('table', {'class': 'iTable'})
-    th_texts = []
-    for table in tables:
-        tbody = table.find('tbody') or table
-        rows = tbody.find_all('tr')
-        for row in rows:
-            th = row.find('th')
-            td = row.find('td')
-            if th:
-                th_texts.append(th.text.strip())
-            if th and td and th.text.strip() == 'Tournament type':
-                return td.text.strip()
-    # Debug: print HTML and all th texts if type not found
-    print(f"\n--- DEBUG: HTML content of tournament detail page {detail_url} (first 10000 chars) ---\n")
-    print(response.text[:10000])
-    print("\n--- DEBUG: <th> texts found on page ---\n")
-    print(th_texts)
-    print("\n--- END DEBUG ---\n")
-    return ''
+    catalog_row, _ = details
+    return catalog_row.get('Type', '')
 
 def read_existing_ids(filename: Path) -> Set[str]:
-    ids: Set[str] = set()
+    return {row['ID'] for row in read_existing_tournaments(filename) if row.get('ID')}
+
+def read_existing_tournaments(filename: Path) -> List[Dict[str, str]]:
     if not filename.exists():
-        return ids
+        return []
     with filename.open('r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
-        for row in reader:
-            ids.add(row['ID'])
-    return ids
+        return [dict(row) for row in reader]
 
 def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]]):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,9 +104,24 @@ def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]])
         for t in tournaments:
             writer.writerow(t)
 
+def write_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]]):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with filename.open('w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'])
+        writer.writeheader()
+        for t in tournaments:
+            writer.writerow({
+                'ID': t.get('ID', ''),
+                'Name': t.get('Name', ''),
+                'Type': t.get('Type', ''),
+            })
+
 def main():
     parser = argparse.ArgumentParser(description="Scrape tournament URLs.")
     parser.add_argument("--full", action="store_true", help="Run a full scrape (all pages). Default is incremental (5 pages).")
+    parser.add_argument("--pages", type=int, default=MAX_PAGES, help="Number of archive pages to scan in incremental mode.")
+    parser.add_argument("--workers", type=int, default=5, help="Parallel workers for tournament detail pages.")
+    parser.add_argument("--refresh-existing", action="store_true", help="Refresh type/name for tournaments already present in the CSV.")
     args = parser.parse_args()
 
     # Pass 1: Collect all tournaments from overview pages
@@ -118,55 +132,71 @@ def main():
         logging.info("Starting FULL scrape of tournament URLs.")
         page_range = range(1, 10000) # Effectively infinite for this context
     else:
-        logging.info(f"Starting INCREMENTAL scrape of tournament URLs (max {MAX_PAGES} pages).")
-        page_range = range(1, MAX_PAGES + 1)
+        logging.info(f"Starting INCREMENTAL scrape of tournament URLs (max {args.pages} pages).")
+        page_range = range(1, args.pages + 1)
 
-    for page_num in page_range:
-        page_url = BASE_URL + str(page_num)
-        response = fetch_page(page_url)
-        if not response:
-            logging.info(f"Stopping: No response for page {page_num}.")
-            break
-        soup = BeautifulSoup(response.text, 'html.parser')
-        tournaments = parse_tournaments_from_overview(soup)
-        if not tournaments:
-            logging.info(f"Stopping: No tournaments found on page {page_num}.")
-            break
-        all_tournaments.extend(tournaments)
-        logging.info(f"Parsed page {page_num} with {len(tournaments)} tournaments.")
+    with utils.get_retry_session() as session:
+        for page_num in page_range:
+            page_url = BASE_URL + str(page_num)
+            response = fetch_page(page_url, session)
+            if not response:
+                logging.info(f"Stopping: No response for page {page_num}.")
+                break
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tournaments = parse_tournaments_from_overview(soup)
+            if not tournaments:
+                logging.info(f"Stopping: No tournaments found on page {page_num}.")
+                break
+            all_tournaments.extend(tournaments)
+            logging.info(f"Parsed page {page_num} with {len(tournaments)} tournaments.")
     logging.info(f"Collected {len(all_tournaments)} tournaments from overview pages.")
 
-    # Pass 2: Only fetch type for tournaments not in CSV
-    # If full scrape, we might want to re-check types?
-    # The requirement says "overwrite the current table" for matches, but for URLs it implies fetching all.
-    # However, for robustness, if we already have the type, we might blindly trust it unless "overwrite" is strictly required here too.
-    # Let's keep logic: if ID exists, skip. If full scrape, maybe we should NOT skip?
-    # The user said "overwrite the current table" in the context of "full scrape".
-    # For tournament_urls.py, "incremental" means append new ones. "Full" usually means "ensure everything is there".
-    # If we want to strictly overwrite, we should clear the CSV or ignore existing.
-    
-    # Current implementation reads existing IDs to know what to skip.
-    # If full scrape, we should probably re-verify types OR just ensure we have them all.
-    # Since checking type requires a request per tournament, re-checking ALL 6000 tournaments is expensive.
-    # I will assume "Full" here mainly applies to *finding* potentially missed tournaments from older pages.
-    # But for matches, it explicitly says "overwrite".
-    
     existing_ids = read_existing_ids(OUTPUT_FILE)
+    tournaments_to_parse = [
+        t for t in all_tournaments
+        if args.refresh_existing or t['ID'] not in existing_ids
+    ]
     new_tournaments = []
-    
-    for t in all_tournaments:
-        if t['ID'] in existing_ids:
-            continue  # Skip already collected
-        t_type = get_tournament_type(t['DetailURL'])
-        new_tournaments.append({
-            'ID': t['ID'],
-            'Name': t['Name'],
-            'Type': t_type
-        })
-        logging.info(f"Parsed tournament: ID={t['ID']}, Name={t['Name']}, Type={t_type}")
+    new_metadata_rows = []
+
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+        future_to_tournament = {
+            executor.submit(get_tournament_details, t): t
+            for t in tournaments_to_parse
+        }
+        for future in as_completed(future_to_tournament):
+            t = future_to_tournament[future]
+            try:
+                details = future.result()
+            except Exception as exc:
+                logging.warning("Failed parsing tournament %s: %s", t['ID'], exc)
+                details = None
+            if not details:
+                continue
+            catalog_row, metadata_row = details
+            new_tournaments.append(catalog_row)
+            new_metadata_rows.append(metadata_row)
+            logging.info(
+                "Parsed tournament: ID=%s, Name=%s, Type=%s",
+                catalog_row['ID'],
+                catalog_row['Name'],
+                catalog_row['Type'],
+            )
     if new_tournaments:
-        append_tournaments_to_csv(OUTPUT_FILE, new_tournaments)
-        logging.info(f"Appended {len(new_tournaments)} new tournaments to {OUTPUT_FILE}.")
+        if args.refresh_existing:
+            parsed_by_id = {t['ID']: t for t in new_tournaments}
+            merged_tournaments = []
+            for existing in read_existing_tournaments(OUTPUT_FILE):
+                replacement = parsed_by_id.pop(existing.get('ID'), None)
+                merged_tournaments.append(replacement or existing)
+            merged_tournaments.extend(parsed_by_id.values())
+            write_tournaments_to_csv(OUTPUT_FILE, merged_tournaments)
+            logging.info(f"Refreshed {len(new_tournaments)} tournaments in {OUTPUT_FILE}.")
+        else:
+            append_tournaments_to_csv(OUTPUT_FILE, new_tournaments)
+            logging.info(f"Appended {len(new_tournaments)} new tournaments to {OUTPUT_FILE}.")
+        tournament_metadata.upsert_metadata_csv(METADATA_FILE, new_metadata_rows)
+        logging.info(f"Updated {METADATA_FILE} with {len(new_metadata_rows)} metadata rows.")
     else:
         logging.info("No new tournaments found.")
 
