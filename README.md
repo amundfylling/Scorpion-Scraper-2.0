@@ -49,6 +49,8 @@ default, then replaces those old tournament rows. This catches late score
 updates and tournaments that were scraped before all stages were complete.
 Team tournaments are included when SportScorpion exposes player-level games;
 the aggregate team score is skipped and only the individual games are saved.
+Run `scrape_tournament_urls.py --full --refresh-existing` before a full match
+scrape to refresh tournament metadata and stage caches used for faster scraping.
 
 To execute the scrapers in the required order (tournaments → matches → players),
 run the helper script:
@@ -68,6 +70,8 @@ This script can be scheduled to run automatically each night using `cron`:
 - `data/tournament_data.csv` keeps the compatibility tournament catalog with
   `ID`, `Name`, and `Type`.
 - `data/tournament_metadata.csv` stores expanded tournament metadata as CSV.
+- `data/tournament_stages.csv` stores tournament stage URLs so match scraping
+  can skip tournament detail pages when the cache is populated.
 - `data/scraped_matches.parquet` stores played matches. Existing columns are
   preserved; newer runs add nullable match IDs, walkover flags, tournament type,
   and team context columns.

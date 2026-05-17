@@ -94,8 +94,15 @@ class MatchParserTests(unittest.TestCase):
             "stage-url",
             lambda team_match_id: soup(detail_html),
         )
+        parallel_rows = scrape_matches.parse_team_stage_matches_parallel(
+            soup(stage_html),
+            "stage-url",
+            lambda team_match_id: soup(detail_html),
+            detail_workers=2,
+        )
 
         self.assertEqual(len(rows), 2)
+        self.assertEqual(parallel_rows, rows)
         self.assertEqual([row["MatchID"] for row in rows], ["2064844", "2064845"])
         self.assertEqual({row["TeamMatchID"] for row in rows}, {"2064843"})
         self.assertEqual(rows[0]["Team1"], "Fjerppen")
@@ -164,6 +171,42 @@ class TournamentMetadataParserTests(unittest.TestCase):
         self.assertEqual(row["SWRMultiplier"], "0.5")
         self.assertEqual(row["Date"], "2026-05-03")
         self.assertEqual(json.loads(row["ExtraMetadataJson"]), {"Unknown field": "Keep me"})
+
+    def test_tournament_stage_cache_rows(self):
+        html = """
+        <table class="stages-table">
+          <tr>
+            <td class="stage-gr">1</td>
+            <td><a href="/eng/tournament/stage/23223/">Participants</a></td>
+            <td><a href="/eng/tournament/stage/23223/matches/">Schedule and results</a></td>
+          </tr>
+          <tr>
+            <td class="stage-gr">2</td>
+            <td><a href="/eng/tournament/stage/23318/matches/">Schedule and results</a></td>
+          </tr>
+        </table>
+        """
+
+        rows = tournament_metadata.parse_tournament_stages(
+            soup(html),
+            "7979",
+            "https://th.sportscorpion.com",
+        )
+
+        self.assertEqual(rows, [
+            {
+                "TournamentID": "7979",
+                "StageID": "23223",
+                "StageSequence": "1",
+                "StageURL": "https://th.sportscorpion.com/eng/tournament/stage/23223/matches/?print",
+            },
+            {
+                "TournamentID": "7979",
+                "StageID": "23318",
+                "StageSequence": "2",
+                "StageURL": "https://th.sportscorpion.com/eng/tournament/stage/23318/matches/?print",
+            },
+        ])
 
 
 if __name__ == "__main__":

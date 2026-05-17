@@ -34,6 +34,13 @@ METADATA_FIELDS = [
     "ScrapedAt",
 ]
 
+STAGE_FIELDS = [
+    "TournamentID",
+    "StageID",
+    "StageSequence",
+    "StageURL",
+]
+
 INFO_FIELD_MAP = {
     "Tournament type": "Type",
     "Status": "Status",
@@ -149,6 +156,34 @@ def catalog_row_from_metadata(row: Dict[str, str]) -> Dict[str, str]:
         "Type": row.get("Type", ""),
     }
 
+def parse_tournament_stages(soup, tournament_id: str, base_url: str) -> List[Dict[str, str]]:
+    stages = []
+    current_stage_sequence = ""
+
+    for row in soup.select("table.stages-table tr"):
+        seq_cell = row.select_one("td.stage-gr")
+        if seq_cell:
+            current_stage_sequence = seq_cell.get_text(strip=True)
+
+        sched_link = row.select_one('a:-soup-contains("Schedule and results")')
+        if not sched_link:
+            continue
+
+        href = sched_link.get("href", "")
+        match = re.search(r"/tournament/stage/(\d+)/matches/?", href)
+        if not match:
+            continue
+
+        stage_id = match.group(1)
+        stages.append({
+            "TournamentID": str(tournament_id),
+            "StageID": stage_id,
+            "StageSequence": current_stage_sequence,
+            "StageURL": f"{base_url}{href}?print",
+        })
+
+    return stages
+
 def read_metadata_csv(filename: Path) -> List[Dict[str, str]]:
     if not filename.exists():
         return []
@@ -159,7 +194,7 @@ def read_metadata_csv(filename: Path) -> List[Dict[str, str]]:
 def write_metadata_csv(filename: Path, rows: Iterable[Dict[str, str]]) -> None:
     filename.parent.mkdir(parents=True, exist_ok=True)
     with filename.open("w", encoding="utf-8", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=METADATA_FIELDS)
+        writer = csv.DictWriter(csvfile, fieldnames=METADATA_FIELDS, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in METADATA_FIELDS})
@@ -179,3 +214,32 @@ def upsert_metadata_csv(filename: Path, rows: Iterable[Dict[str, str]]) -> None:
 
     merged.extend(incoming_by_id.values())
     write_metadata_csv(filename, merged)
+
+def read_stage_csv(filename: Path) -> List[Dict[str, str]]:
+    if not filename.exists():
+        return []
+    with filename.open("r", encoding="utf-8-sig", newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        return [{field: row.get(field, "") for field in STAGE_FIELDS} for row in reader]
+
+def write_stage_csv(filename: Path, rows: Iterable[Dict[str, str]]) -> None:
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    with filename.open("w", encoding="utf-8", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=STAGE_FIELDS, lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in STAGE_FIELDS})
+
+def upsert_stage_csv(filename: Path, rows: Iterable[Dict[str, str]]) -> None:
+    incoming = [row for row in rows if row.get("TournamentID") and row.get("StageID")]
+    if not incoming:
+        return
+
+    existing = read_stage_csv(filename)
+    incoming_tournament_ids = {row["TournamentID"] for row in incoming}
+    merged = [
+        row for row in existing
+        if row.get("TournamentID") not in incoming_tournament_ids
+    ]
+    merged.extend(incoming)
+    write_stage_csv(filename, merged)

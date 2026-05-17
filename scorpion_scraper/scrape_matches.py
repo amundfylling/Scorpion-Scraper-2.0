@@ -19,6 +19,8 @@ except ImportError:
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 BASE_URL = "https://th.sportscorpion.com"
+METADATA_FILE = DATA_DIR / "tournament_metadata.csv"
+STAGE_FILE = DATA_DIR / "tournament_stages.csv"
 
 MATCH_COLUMNS = [
     'StageID',
@@ -338,20 +340,12 @@ def parse_team_child_matches(soup: BeautifulSoup, context: Dict[str, Any]) -> Li
 
     return child_matches
 
-def parse_team_stage_matches(
-    soup: BeautifulSoup,
-    url: str,
-    detail_soup_loader: Callable[[str], BeautifulSoup],
-) -> List[Dict[str, Any]]:
-    """
-    Parse team tournament schedules and expand each aggregate match into
-    played player-vs-player child matches.
-    """
+def collect_team_match_contexts(soup: BeautifulSoup, url: str) -> List[Dict[str, Any]]:
     saved_matches_div = soup.find('div', class_='saved-matches')
     if saved_matches_div:
         saved_matches_div.decompose()
 
-    match_info = []
+    contexts = []
     is_playoff = len(soup.select('tr.series-container')) > 0
 
     if is_playoff:
@@ -391,8 +385,8 @@ def parse_team_stage_matches(
                             'RoundNumber': playoff_fraction,
                             'PlayoffGameNumber': game_number,
                         }
-                        _append_team_child_matches(match_info, detail_soup_loader, context)
-        return match_info
+                        contexts.append(context)
+        return contexts
 
     for table in soup.select('table.grTable'):
         header = table.select_one('th:-soup-contains("Tour")')
@@ -426,17 +420,80 @@ def parse_team_stage_matches(
                 'RoundNumber': round_number,
                 'PlayoffGameNumber': None,
             }
-            _append_team_child_matches(match_info, detail_soup_loader, context)
+            contexts.append(context)
+
+    return contexts
+
+def parse_team_stage_matches(
+    soup: BeautifulSoup,
+    url: str,
+    detail_soup_loader: Callable[[str], BeautifulSoup],
+) -> List[Dict[str, Any]]:
+    """
+    Parse team tournament schedules and expand each aggregate match into
+    played player-vs-player child matches.
+    """
+    match_info = []
+    for context in collect_team_match_contexts(soup, url):
+        _append_team_child_matches(match_info, detail_soup_loader, context)
+    return match_info
+
+def parse_team_stage_matches_parallel(
+    soup: BeautifulSoup,
+    url: str,
+    detail_soup_loader: Callable[[str], BeautifulSoup],
+    detail_workers: int,
+) -> List[Dict[str, Any]]:
+    contexts = collect_team_match_contexts(soup, url)
+    if not contexts:
+        return []
+
+    match_info = []
+    with ThreadPoolExecutor(max_workers=max(1, detail_workers)) as executor:
+        future_to_context = {
+            executor.submit(detail_soup_loader, str(context['TeamMatchID'])): context
+            for context in contexts
+            if context.get('TeamMatchID')
+        }
+        for future in as_completed(future_to_context):
+            context = future_to_context[future]
+            try:
+                detail_soup = future.result()
+            except Exception as exc:
+                logging.warning("Failed loading team match detail %s: %s", context.get('TeamMatchID'), exc)
+                continue
+            match_info.extend(parse_team_child_matches(detail_soup, context))
 
     return match_info
 
-def get_team_match_info(session, url: str) -> List[Dict[str, Any]]:
+def get_team_match_info(session, url: str, detail_workers: int = 10) -> List[Dict[str, Any]]:
     soup = fetch_page(session, url)
 
     def detail_soup_loader(team_match_id: str) -> BeautifulSoup:
+        if detail_workers > 1:
+            with utils.get_retry_session() as detail_session:
+                return fetch_page(detail_session, f"{BASE_URL}/eng/match/id/{team_match_id}/")
         return fetch_page(session, f"{BASE_URL}/eng/match/id/{team_match_id}/")
 
+    if detail_workers > 1:
+        return parse_team_stage_matches_parallel(soup, url, detail_soup_loader, detail_workers)
     return parse_team_stage_matches(soup, url, detail_soup_loader)
+
+def load_metadata_by_id(filename: Path = METADATA_FILE) -> Dict[str, Dict[str, str]]:
+    return {
+        row["TournamentID"]: row
+        for row in tournament_metadata.read_metadata_csv(filename)
+        if row.get("TournamentID")
+    }
+
+def load_stages_by_id(filename: Path = STAGE_FILE) -> Dict[str, List[Dict[str, str]]]:
+    stages_by_id: Dict[str, List[Dict[str, str]]] = {}
+    for row in tournament_metadata.read_stage_csv(filename):
+        tournament_id = row.get("TournamentID")
+        if not tournament_id:
+            continue
+        stages_by_id.setdefault(tournament_id, []).append(row)
+    return stages_by_id
 
 def build_output_row(
     match: Dict[str, Any],
@@ -474,45 +531,54 @@ def build_output_row(
         'TeamGameNumber': safe_int(match.get('TeamGameNumber')),
     }
 
-def get_tournament_matches(tournament_urls: List[str], existing_stage_ids: set[str], max_workers: int = 10) -> pd.DataFrame:
+def get_tournament_matches(
+    tournament_urls: List[str],
+    existing_stage_ids: set[str],
+    max_workers: int = 10,
+    metadata_by_id: Optional[Dict[str, Dict[str, str]]] = None,
+    stages_by_id: Optional[Dict[str, List[Dict[str, str]]]] = None,
+    team_detail_workers: int = 5,
+) -> pd.DataFrame:
     all_matches = []
+    metadata_by_id = metadata_by_id or {}
+    stages_by_id = stages_by_id or {}
 
     def fetch_tournament_data(url):
         with utils.get_retry_session() as session:
             tournament_id = tournament_metadata.extract_tournament_id(url)
             tournament_url = f"{BASE_URL}/eng/tournament/id/{tournament_id}/"
-            tournament_soup = fetch_page(session, tournament_url)
-            metadata_row = tournament_metadata.parse_tournament_metadata(
-                tournament_soup,
-                tournament_url,
-                fallback_id=tournament_id,
-            )
+            metadata_row = metadata_by_id.get(tournament_id)
+            stage_rows = stages_by_id.get(tournament_id, [])
+
+            if not metadata_row or not stage_rows:
+                tournament_soup = fetch_page(session, tournament_url)
+                if not metadata_row:
+                    metadata_row = tournament_metadata.parse_tournament_metadata(
+                        tournament_soup,
+                        tournament_url,
+                        fallback_id=tournament_id,
+                    )
+                if not stage_rows:
+                    stage_rows = tournament_metadata.parse_tournament_stages(
+                        tournament_soup,
+                        tournament_id,
+                        BASE_URL,
+                    )
+
             tournament_type = metadata_row.get('Type') or 'Unknown'
             tournament_name = metadata_row.get('Name') or 'Unknown'
             date = metadata_row.get('Date') or ''
 
-            # Extract the stages and their sequences
-            stage_rows = tournament_soup.select('table.stages-table tr')
-            stage_data = []
-            current_stage_sequence = None
-            for row in stage_rows:
-                seq_cell = row.select_one('td.stage-gr')
-                if seq_cell:
-                    current_stage_sequence = seq_cell.get_text(strip=True)
-                sched_link = row.select_one('a:-soup-contains("Schedule and results")')
-                if not sched_link:
-                    continue
-                stage_url = f"{BASE_URL}{sched_link['href']}?print"
-                stage_id = stage_url.split('/')[-3]
-                stage_data.append((stage_id, stage_url, current_stage_sequence))
-
             stage_matches = []
-            for stage_id, stage_url, stage_sequence in stage_data:
+            for stage_row in stage_rows:
+                stage_id = stage_row.get('StageID', '')
+                stage_url = stage_row.get('StageURL') or f"{BASE_URL}/eng/tournament/stage/{stage_id}/matches/?print"
+                stage_sequence = stage_row.get('StageSequence', '')
                 # Skip stage if already in existing_stage_ids
                 if stage_id in existing_stage_ids:
                     continue
                 if tournament_type.lower() == 'team':
-                    matches = get_team_match_info(session, stage_url)
+                    matches = get_team_match_info(session, stage_url, detail_workers=team_detail_workers)
                 else:
                     matches = get_match_info(session, stage_url)
                 for match in matches:
@@ -614,6 +680,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scrape matches.")
     parser.add_argument("--full", action="store_true", help="Run a full scrape (all tournaments) and overwrite existing data. Default is incremental.")
     parser.add_argument("--workers", type=int, default=10, help="Parallel workers for tournament pages.")
+    parser.add_argument("--team-detail-workers", type=int, default=5, help="Parallel workers for team aggregate match detail pages.")
     parser.add_argument(
         "--refresh-recent-days",
         type=int,
@@ -628,6 +695,15 @@ if __name__ == "__main__":
     # Get tournament URLs from CSV file
     csv_file_path = DATA_DIR / "tournament_data.csv"
     tournament_urls = get_tournament_urls(csv_file_path)
+    metadata_by_id = load_metadata_by_id(METADATA_FILE)
+    stages_by_id = load_stages_by_id(STAGE_FILE)
+    cached_stage_count = sum(len(stages) for stages in stages_by_id.values())
+    logging.info(
+        "Loaded metadata cache for %s tournaments and stage cache with %s stages across %s tournaments.",
+        len(metadata_by_id),
+        cached_stage_count,
+        len(stages_by_id),
+    )
 
     # Parquet output file
     output_file = DATA_DIR / "scraped_matches.parquet"
@@ -668,7 +744,14 @@ if __name__ == "__main__":
     logging.info(f"Scraping {len(tournament_urls_to_scrape)} tournaments (after filtering and limiting)")
 
     if tournament_urls_to_scrape:
-        df = get_tournament_matches(tournament_urls_to_scrape, existing_stage_ids=set(), max_workers=args.workers)
+        df = get_tournament_matches(
+            tournament_urls_to_scrape,
+            existing_stage_ids=set(),
+            max_workers=args.workers,
+            metadata_by_id=metadata_by_id,
+            stages_by_id=stages_by_id,
+            team_detail_workers=args.team_detail_workers,
+        )
         logging.info(f"Total matches scraped: {len(df)}")
         logging.info(f"DataFrame shape: {df.shape}")
 

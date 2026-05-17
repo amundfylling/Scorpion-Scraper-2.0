@@ -22,6 +22,7 @@ MAX_PAGES = 5 # since the script runs daily, it only needs to go through the new
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 OUTPUT_FILE = DATA_DIR / "tournament_data.csv"
 METADATA_FILE = DATA_DIR / "tournament_metadata.csv"
+STAGE_FILE = DATA_DIR / "tournament_stages.csv"
 
 utils.setup_logging()
 
@@ -59,7 +60,7 @@ def parse_tournaments_from_overview(soup: BeautifulSoup) -> List[Dict[str, str]]
             })
     return tournaments
 
-def get_tournament_details(tournament: Dict[str, str]) -> Optional[Tuple[Dict[str, str], Dict[str, str]]]:
+def get_tournament_details(tournament: Dict[str, str]) -> Optional[Tuple[Dict[str, str], Dict[str, str], List[Dict[str, str]]]]:
     with utils.get_retry_session() as session:
         response = fetch_page(tournament['DetailURL'], session)
         if not response:
@@ -71,7 +72,12 @@ def get_tournament_details(tournament: Dict[str, str]) -> Optional[Tuple[Dict[st
         fallback_id=tournament['ID'],
         fallback_name=tournament['Name'],
     )
-    return tournament_metadata.catalog_row_from_metadata(metadata_row), metadata_row
+    stage_rows = tournament_metadata.parse_tournament_stages(
+        soup,
+        metadata_row['TournamentID'],
+        TOURNAMENT_BASE,
+    )
+    return tournament_metadata.catalog_row_from_metadata(metadata_row), metadata_row, stage_rows
 
 def get_tournament_type(detail_url: str) -> str:
     details = get_tournament_details({
@@ -81,7 +87,7 @@ def get_tournament_type(detail_url: str) -> str:
     })
     if not details:
         return ''
-    catalog_row, _ = details
+    catalog_row, _, _ = details
     return catalog_row.get('Type', '')
 
 def read_existing_ids(filename: Path) -> Set[str]:
@@ -98,7 +104,7 @@ def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]])
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     file_exists = filename.exists()
     with filename.open('a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'])
+        writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'], lineterminator='\n')
         if not file_exists:
             writer.writeheader()
         for t in tournaments:
@@ -107,7 +113,7 @@ def append_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]])
 def write_tournaments_to_csv(filename: Path, tournaments: List[Dict[str, str]]):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with filename.open('w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'])
+        writer = csv.DictWriter(csvfile, fieldnames=['ID', 'Name', 'Type'], lineterminator='\n')
         writer.writeheader()
         for t in tournaments:
             writer.writerow({
@@ -158,6 +164,7 @@ def main():
     ]
     new_tournaments = []
     new_metadata_rows = []
+    new_stage_rows = []
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
         future_to_tournament = {
@@ -173,9 +180,10 @@ def main():
                 details = None
             if not details:
                 continue
-            catalog_row, metadata_row = details
+            catalog_row, metadata_row, stage_rows = details
             new_tournaments.append(catalog_row)
             new_metadata_rows.append(metadata_row)
+            new_stage_rows.extend(stage_rows)
             logging.info(
                 "Parsed tournament: ID=%s, Name=%s, Type=%s",
                 catalog_row['ID'],
@@ -197,6 +205,8 @@ def main():
             logging.info(f"Appended {len(new_tournaments)} new tournaments to {OUTPUT_FILE}.")
         tournament_metadata.upsert_metadata_csv(METADATA_FILE, new_metadata_rows)
         logging.info(f"Updated {METADATA_FILE} with {len(new_metadata_rows)} metadata rows.")
+        tournament_metadata.upsert_stage_csv(STAGE_FILE, new_stage_rows)
+        logging.info(f"Updated {STAGE_FILE} with {len(new_stage_rows)} stage rows.")
     else:
         logging.info("No new tournaments found.")
 
