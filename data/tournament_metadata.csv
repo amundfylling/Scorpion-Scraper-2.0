@@ -1,0 +1,6 @@
+TournamentID,Name,Type,Status,Level,SWRMultiplier,Country,City,Address,Date,EndDate,StartTime,RegistrationStart,RegistrationEnd,Participants,MaxParticipants,Email,PhoneNumber,DetailURL,ExtraMetadataJson,ScrapedAt
+8043,"Лига Везёлка ""Сезон 2025-2026"" Training #12",Individual,Finished *,6,0.3,Russia,Belgorod,,2026-05-14,2026-05-15,19:00,,,2,,,,https://th.sportscorpion.com/eng/tournament/id/8043/,,2026-05-17T03:54:31+00:00
+8045,Кубок Яблочкова 42,Individual,Finished,6,1.0,Russia,Saint Petersburg,,2026-05-14,2026-05-14,,,,3,,,,https://th.sportscorpion.com/eng/tournament/id/8045/,,2026-05-17T03:54:31+00:00
+8038,Лига Столичного Лицея #7,Individual,Finished,6,0.3,Russia,Izhevsk,,2026-05-14,2026-05-14,,,,8,,,,https://th.sportscorpion.com/eng/tournament/id/8038/,,2026-05-17T03:54:31+00:00
+8031,Лига Хороших Хоккеев Весна 2026 #8,Individual,Finished,5,1.0,Russia,Saint Petersburg,Невский проспект 110,2026-05-14,2026-05-14,19:00,2026-05-09 12:00,2026-05-14 18:00,12,,,+7 (911) 298-56-70,https://th.sportscorpion.com/eng/tournament/id/8031/,,2026-05-17T03:54:31+00:00
+8022,6 Малая Хоккейная Лига. 9 этап,Individual,Finished,6,1.0,Russia,Saint Petersburg,"клуб Ровесник Малый пр, 14 В.О.",2026-05-14,2026-05-14,18:30,,,10,,,,https://th.sportscorpion.com/eng/tournament/id/8022/,,2026-05-17T03:54:31+00:00
