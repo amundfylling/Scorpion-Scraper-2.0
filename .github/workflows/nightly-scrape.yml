@@ -13,10 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 1   # only the latest data is needed; full history is slow to clone
       - uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+          cache: 'pip'
       - run: pip install -r requirements.txt
       - run: python scorpion_scraper/nightly_scrape.py
       - name: Commit and push results

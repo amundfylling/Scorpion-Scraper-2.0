@@ -8,7 +8,6 @@ import logging
 from pathlib import Path
 import argparse
 import re
-import threading
 
 try:
     from . import utils
@@ -19,14 +18,9 @@ except ImportError:
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 BASE_URL = "https://th.sportscorpion.com"
 PLAYER_COLUMNS = ['PlayerID', 'Name', 'RankingID', 'Country', 'City', 'DateOfBirth', 'Sex']
-THREAD_LOCAL = threading.local()
 
 def get_thread_session() -> requests.Session:
-    session = getattr(THREAD_LOCAL, "session", None)
-    if session is None:
-        session = utils.get_retry_session()
-        THREAD_LOCAL.session = session
-    return session
+    return utils.get_thread_session()
 
 def fetch_page(session, url: str) -> BeautifulSoup:
     """Fetch the page content and return a BeautifulSoup object"""
@@ -125,7 +119,7 @@ def get_unique_player_ids(parquet_file_path: Path) -> List[int]:
 def scrape_all_players(
     player_ids: List[int],
     output_file: Path = DATA_DIR / "players_data.csv",
-    max_workers: int = 5,
+    max_workers: int = 10,
     refresh_existing: bool = False,
 ) -> pd.DataFrame:
     """
@@ -200,7 +194,7 @@ def main():
     """Main execution function"""
     utils.setup_logging()
     parser = argparse.ArgumentParser(description="Scrape player profile data from player IDs in scraped matches.")
-    parser.add_argument("--workers", type=int, default=5, help="Parallel workers for player profile pages.")
+    parser.add_argument("--workers", type=int, default=10, help="Parallel workers for player profile pages.")
     parser.add_argument("--refresh-existing", action="store_true", help="Re-scrape all players, not just new or blank rows.")
     args = parser.parse_args()
 

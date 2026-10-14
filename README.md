@@ -41,12 +41,21 @@ Useful options:
 ```bash
 python scorpion_scraper/scrape_tournament_urls.py --pages 10 --workers 8
 python scorpion_scraper/scrape_matches.py --workers 12 --refresh-recent-days 30
+python scorpion_scraper/scrape_matches.py --recheck-empty
 python scorpion_scraper/scrape_players.py --workers 8 --refresh-existing
 ```
 
 Incremental match scraping re-scrapes tournaments from the last 14 days by
 default, then replaces those old tournament rows. This catches late score
 updates and tournaments that were scraped before all stages were complete.
+Tournaments that were not finished when they were last scraped are also
+re-scraped for 60 days (`--refresh-unfinished-days`). For any tournament that is
+not marked `Finished`, the live tournament page is read instead of the cached
+stage list, so stages added later (such as playoffs) and moved dates are picked
+up, and the metadata and stage caches are updated.
+Finished tournaments that have never produced player matches (mostly team
+tournaments that only publish aggregate scores) are skipped after a week; pass
+`--recheck-empty` to scrape them anyway.
 Team tournaments are included when SportScorpion exposes player-level games;
 the aggregate team score is skipped and only the individual games are saved.
 Run `scrape_tournament_urls.py --full --refresh-existing` before a full match

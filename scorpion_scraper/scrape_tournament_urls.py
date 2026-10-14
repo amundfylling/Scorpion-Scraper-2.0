@@ -4,6 +4,7 @@ import argparse
 import logging
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import islice
 from typing import Dict, List, Optional, Set, Tuple
 from pathlib import Path
 
@@ -60,11 +61,16 @@ def parse_tournaments_from_overview(soup: BeautifulSoup) -> List[Dict[str, str]]
             })
     return tournaments
 
+def fetch_overview_page(page_num: int) -> Optional[List[Dict[str, str]]]:
+    response = fetch_page(BASE_URL + str(page_num), utils.get_thread_session())
+    if not response:
+        return None
+    return parse_tournaments_from_overview(BeautifulSoup(response.text, 'lxml'))
+
 def get_tournament_details(tournament: Dict[str, str]) -> Optional[Tuple[Dict[str, str], Dict[str, str], List[Dict[str, str]]]]:
-    with utils.get_retry_session() as session:
-        response = fetch_page(tournament['DetailURL'], session)
-        if not response:
-            return None
+    response = fetch_page(tournament['DetailURL'], utils.get_thread_session())
+    if not response:
+        return None
     soup = BeautifulSoup(response.text, 'lxml')
     metadata_row = tournament_metadata.parse_tournament_metadata(
         soup,
@@ -141,25 +147,42 @@ def main():
         logging.info(f"Starting INCREMENTAL scrape of tournament URLs (max {args.pages} pages).")
         page_range = range(1, args.pages + 1)
 
-    with utils.get_retry_session() as session:
-        for page_num in page_range:
-            page_url = BASE_URL + str(page_num)
-            response = fetch_page(page_url, session)
-            if not response:
-                logging.info(f"Stopping: No response for page {page_num}.")
+    # Fetch overview pages in parallel batches, keeping page order and
+    # stopping at the first missing or empty page.
+    pages = iter(page_range)
+    batch_size = max(1, args.workers)
+    with ThreadPoolExecutor(max_workers=batch_size) as executor:
+        stop = False
+        while not stop:
+            batch = list(islice(pages, batch_size))
+            if not batch:
                 break
-            soup = BeautifulSoup(response.text, 'html.parser')
-            tournaments = parse_tournaments_from_overview(soup)
-            if not tournaments:
-                logging.info(f"Stopping: No tournaments found on page {page_num}.")
-                break
-            all_tournaments.extend(tournaments)
-            logging.info(f"Parsed page {page_num} with {len(tournaments)} tournaments.")
+            results = executor.map(fetch_overview_page, batch)
+            for page_num, tournaments in zip(batch, results):
+                if tournaments is None:
+                    logging.info(f"Stopping: No response for page {page_num}.")
+                    stop = True
+                    break
+                if not tournaments:
+                    logging.info(f"Stopping: No tournaments found on page {page_num}.")
+                    stop = True
+                    break
+                all_tournaments.extend(tournaments)
+                logging.info(f"Parsed page {page_num} with {len(tournaments)} tournaments.")
     logging.info(f"Collected {len(all_tournaments)} tournaments from overview pages.")
+
+    # The archive can shift while it is being paged through, so the same
+    # tournament may be listed on two pages; only parse (and append) it once.
+    seen_ids: Set[str] = set()
+    unique_tournaments = []
+    for t in all_tournaments:
+        if t['ID'] not in seen_ids:
+            seen_ids.add(t['ID'])
+            unique_tournaments.append(t)
 
     existing_ids = read_existing_ids(OUTPUT_FILE)
     tournaments_to_parse = [
-        t for t in all_tournaments
+        t for t in unique_tournaments
         if args.refresh_existing or t['ID'] not in existing_ids
     ]
     new_tournaments = []
