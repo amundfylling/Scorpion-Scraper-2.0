@@ -1,4 +1,5 @@
 import logging
+import threading
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -53,6 +54,21 @@ def get_retry_session(
     session.headers.update(DEFAULT_HEADERS)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    return session
+
+_THREAD_LOCAL = threading.local()
+
+def get_thread_session() -> requests.Session:
+    """
+    Return a retrying session owned by the current thread.
+
+    Reusing one session per worker thread keeps HTTP connections alive between
+    requests, which avoids a new TCP/TLS handshake for every page.
+    """
+    session = getattr(_THREAD_LOCAL, "session", None)
+    if session is None:
+        session = get_retry_session()
+        _THREAD_LOCAL.session = session
     return session
 
 def get_with_status(

@@ -1,5 +1,8 @@
 import json
 import unittest
+from datetime import datetime, timezone
+
+import pandas as pd
 
 from bs4 import BeautifulSoup
 
@@ -8,6 +11,10 @@ from scorpion_scraper import scrape_matches, tournament_metadata
 
 def soup(html):
     return BeautifulSoup(html, "lxml")
+
+
+def page(html):
+    return scrape_matches.parse_html(html)
 
 
 class MatchParserTests(unittest.TestCase):
@@ -28,7 +35,7 @@ class MatchParserTests(unittest.TestCase):
         </table>
         """
 
-        rows = scrape_matches.parse_individual_stage_matches(soup(html), "stage-url")
+        rows = scrape_matches.parse_individual_stage_matches(page(html), "stage-url")
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["MatchID"], "2066636")
@@ -55,7 +62,7 @@ class MatchParserTests(unittest.TestCase):
         </div>
         """
 
-        rows = scrape_matches.parse_individual_stage_matches(soup(html), "stage-url")
+        rows = scrape_matches.parse_individual_stage_matches(page(html), "stage-url")
 
         self.assertEqual(len(rows), 2)
         self.assertEqual([row["MatchID"] for row in rows], ["2066448", "2066449"])
@@ -90,14 +97,14 @@ class MatchParserTests(unittest.TestCase):
         """
 
         rows = scrape_matches.parse_team_stage_matches(
-            soup(stage_html),
+            page(stage_html),
             "stage-url",
-            lambda team_match_id: soup(detail_html),
+            lambda team_match_id: page(detail_html),
         )
         parallel_rows = scrape_matches.parse_team_stage_matches_parallel(
-            soup(stage_html),
+            page(stage_html),
             "stage-url",
-            lambda team_match_id: soup(detail_html),
+            lambda team_match_id: page(detail_html),
             detail_workers=2,
         )
 
@@ -131,9 +138,9 @@ class MatchParserTests(unittest.TestCase):
         """
 
         rows = scrape_matches.parse_team_stage_matches(
-            soup(stage_html),
+            page(stage_html),
             "stage-url",
-            lambda team_match_id: soup(detail_html),
+            lambda team_match_id: page(detail_html),
         )
 
         self.assertEqual(rows, [])
@@ -207,6 +214,100 @@ class TournamentMetadataParserTests(unittest.TestCase):
                 "StageURL": "https://th.sportscorpion.com/eng/tournament/stage/23318/matches/?print",
             },
         ])
+
+
+class MatchParserEdgeCaseTests(unittest.TestCase):
+    def test_playoff_subheaders_assign_their_own_blocks(self):
+        html = """
+        <div class="subheader">Semi-final</div>
+        <div class="gr_match"><table><tr class="series-container">
+          <td class="ma_name1"><a href="/eng/user/id/1/">A</a></td>
+          <td class="ma_name2"><a href="/eng/user/id/2/">B</a></td>
+          <td class="ma_result_xb" data-match-id="11">2 : 1</td>
+        </tr></table></div>
+        <div class="subheader">Final</div>
+        <div class="gr_match"><table><tr class="series-container">
+          <td class="ma_name1"><a href="/eng/user/id/1/">A</a></td>
+          <td class="ma_name2"><a href="/eng/user/id/3/">C</a></td>
+          <td class="ma_result_xb" data-match-id="12">3 : 1</td>
+        </tr></table></div>
+        """
+
+        rows = scrape_matches.parse_individual_stage_matches(page(html), "stage-url")
+
+        self.assertEqual([(row["MatchID"], row["RoundNumber"]) for row in rows], [("11", 0.5), ("12", 1)])
+
+    def test_saved_matches_section_is_ignored(self):
+        html = """
+        <div class="saved-matches"><table class="grTable">
+          <tr><th>1 Tour</th></tr>
+          <tr id="match1"><td class="ma_name1">X</td><td class="ma_name2">Y</td>
+          <td class="ma_result_b">1 : 0</td></tr>
+        </table></div>
+        <table class="grTable">
+          <tr><th>2 Tour</th></tr>
+          <tr id="match2"><td class="ma_name1"><a href="/eng/user/id/5/">P</a></td>
+          <td class="ma_name2"><a href="/eng/user/id/6/">Q</a></td>
+          <td class="ma_result_b">3 : 3 (W.O)</td></tr>
+        </table>
+        """
+
+        rows = scrape_matches.parse_individual_stage_matches(page(html), "stage-url")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["MatchID"], "2")
+        self.assertEqual(rows[0]["RoundNumber"], 2.0)
+        self.assertEqual(rows[0]["Walkover"], "Yes")
+
+
+class IncrementalHelperTests(unittest.TestCase):
+    def test_id_strings_handles_int_and_float_ids(self):
+        self.assertEqual(
+            list(scrape_matches.id_strings(pd.Series([7979, 8001.0, None]))),
+            ["7979", "8001", pd.NA],
+        )
+
+    def test_settled_without_matches_requires_final_old_and_known(self):
+        cutoff = pd.Timestamp("2026-10-01")
+        known_before = datetime(2026, 10, 7, tzinfo=timezone.utc)
+        row = {"Status": "Finished", "Date": "2026-03-01", "ScrapedAt": "2026-03-02T10:00:00+00:00"}
+
+        self.assertTrue(scrape_matches.is_settled_without_matches(row, cutoff, known_before))
+        self.assertFalse(scrape_matches.is_settled_without_matches(dict(row, Status="Finished *"), cutoff, known_before))
+        self.assertFalse(scrape_matches.is_settled_without_matches(dict(row, Date="2026-10-05"), cutoff, known_before))
+        self.assertFalse(scrape_matches.is_settled_without_matches(
+            dict(row, ScrapedAt="2026-10-10T10:00:00+00:00"), cutoff, known_before,
+        ))
+        self.assertFalse(scrape_matches.is_settled_without_matches(None, cutoff, known_before))
+
+    def test_unfinished_tournament_is_read_live(self):
+        cached = {"TournamentID": "1", "Status": "Registration is opened", "Type": "Individual"}
+        calls = []
+        original = scrape_matches.fetch_soup
+        live_html = """
+        <h1 id="header">Cup</h1>
+        <table class="iTable">
+          <tr><th>Tournament type</th><td>Individual</td></tr>
+          <tr><th>Status</th><td>Finished</td></tr>
+          <tr><th>Date of the tournament</th><td>24.09.2026</td></tr>
+        </table>
+        <table class="stages-table"><tr><td class="stage-gr">1</td>
+          <td><a href="/eng/tournament/stage/5/matches/">Schedule and results</a></td></tr></table>
+        """
+        scrape_matches.fetch_soup = lambda session, url: calls.append(url) or soup(live_html)
+        try:
+            metadata, stages, live = scrape_matches.resolve_tournament("1", cached, [])
+            finished, cached_stages, cached_live = scrape_matches.resolve_tournament(
+                "1", dict(metadata), [{"StageID": "5"}],
+            )
+        finally:
+            scrape_matches.fetch_soup = original
+
+        self.assertTrue(live)
+        self.assertEqual(metadata["Date"], "2026-09-24")
+        self.assertEqual([stage["StageID"] for stage in stages], ["5"])
+        self.assertFalse(cached_live)
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":
