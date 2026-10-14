@@ -6,7 +6,7 @@ import pandas as pd
 
 from bs4 import BeautifulSoup
 
-from scorpion_scraper import scrape_matches, tournament_metadata
+from scorpion_scraper import scrape_matches, scrape_players, tournament_metadata
 
 
 def soup(html):
@@ -308,6 +308,48 @@ class IncrementalHelperTests(unittest.TestCase):
         self.assertEqual([stage["StageID"] for stage in stages], ["5"])
         self.assertFalse(cached_live)
         self.assertEqual(len(calls), 1)
+
+
+class PlayerParserTests(unittest.TestCase):
+    def test_profile_page_fields(self):
+        html = """
+        <html><body>
+        <h1 id="header">Users - Pavel Simonov</h1>
+        <table class="iTable">
+          <tr><th>Name, Surname</th><td>Pavel Simonov</td></tr>
+          <tr><th>World ranking</th><td>2040
+              &mdash; 306 place
+            (ID <a href="http://stiga.trefik.cz/ithf/ranking/player.aspx?ID=666217">666217</a>)
+          </td></tr>
+          <tr><th>Country</th><td>Russia</td></tr>
+          <tr><th>City</th><td> Saint Petersburg </td></tr>
+          <tr><th>Teams</th><td><a href="/eng/team/id/136/">Russia Juniors</a></td></tr>
+          <tr><th>Date of birth</th><td>24.12.2005</td></tr>
+          <tr><th>Sex</th><td>Male</td></tr>
+        </table>
+        </body></html>
+        """
+
+        row = scrape_players.parse_player_page(4672, html)
+
+        self.assertEqual(row, {
+            "PlayerID": 4672,
+            "Name": "Pavel Simonov",
+            "RankingID": "666217",
+            "Country": "Russia",
+            "City": "Saint Petersburg",
+            "DateOfBirth": "24.12.2005",
+            "Sex": "Male",
+        })
+        self.assertEqual(list(row), scrape_players.PLAYER_COLUMNS)
+
+    def test_profile_page_without_info_table(self):
+        row = scrape_players.parse_player_page(1, "<html><body><p>No profile</p></body></html>")
+
+        self.assertEqual(row, {
+            "PlayerID": 1, "Name": "", "RankingID": "", "Country": "",
+            "City": "", "DateOfBirth": "", "Sex": "",
+        })
 
 
 if __name__ == "__main__":

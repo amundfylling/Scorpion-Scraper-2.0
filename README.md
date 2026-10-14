@@ -42,7 +42,7 @@ Useful options:
 python scorpion_scraper/scrape_tournament_urls.py --pages 10 --workers 8
 python scorpion_scraper/scrape_matches.py --workers 12 --refresh-recent-days 30
 python scorpion_scraper/scrape_matches.py --recheck-empty
-python scorpion_scraper/scrape_players.py --workers 8 --refresh-existing
+python scorpion_scraper/scrape_players.py --workers 5 --refresh-existing
 ```
 
 Incremental match scraping re-scrapes tournaments from the last 14 days by

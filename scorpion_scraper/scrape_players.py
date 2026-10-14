@@ -11,13 +11,23 @@ import re
 
 try:
     from . import utils
+    from . import scrape_matches
 except ImportError:
     import utils
+    import scrape_matches
 
 # Resolve paths relative to the project root so scripts work from any CWD
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 BASE_URL = "https://th.sportscorpion.com"
 PLAYER_COLUMNS = ['PlayerID', 'Name', 'RankingID', 'Country', 'City', 'DateOfBirth', 'Sex']
+
+# The site renders profile pages server-side and slows down sharply under
+# parallel load: throughput peaks at a handful of concurrent requests, and more
+# workers only make each page slower (and trigger 503s/timeouts). Profiles of
+# active players can take well over 20s to render, so give them a longer read
+# timeout instead of abandoning the render and starting it again on retry.
+DEFAULT_WORKERS = 5
+PLAYER_PAGE_TIMEOUT = (10, 90)
 
 def get_thread_session() -> requests.Session:
     return utils.get_thread_session()
@@ -26,6 +36,53 @@ def fetch_page(session, url: str) -> BeautifulSoup:
     """Fetch the page content and return a BeautifulSoup object"""
     response = utils.get_with_status(session, url)
     return BeautifulSoup(response.text, 'lxml')
+
+def parse_player_page(player_id: int, text) -> Dict[str, Any]:
+    """
+    Parse a player profile page into a player row.
+
+    Uses lxml directly (via the same helpers as the match parser) instead of
+    BeautifulSoup: profile pages of active players are large because they list
+    every tournament played, and building a BeautifulSoup tree for them cost
+    far more CPU than the handful of fields read here.
+    """
+    root = scrape_matches.parse_html(text)
+
+    # Extract player name
+    name_element = next((h1 for h1 in root.iter('h1') if h1.get('id') == 'header'), None)
+    name = scrape_matches.element_text(name_element).split(' - ')[-1] if name_element is not None else ''
+
+    # Extract information from the table
+    table = next((t for t in root.iter('table') if 'iTable' in (t.get('class') or '').split()), None)
+
+    if table is not None:
+        data = {}
+        for row in table.iter('tr'):
+            cells = [cell for cell in row.iter('th', 'td') if cell is not row]
+            if len(cells) == 2:
+                key = scrape_matches.element_text(cells[0]).strip()
+                value = scrape_matches.element_text(cells[1]).strip()
+                data[key] = value
+
+        # Extract specific data fields
+        ranking_match = re.search(r'ID\s*(\d+)', data.get('World ranking', ''))
+        ranking_id = ranking_match.group(1) if ranking_match else ''
+        country = data.get('Country', '')
+        city = data.get('City', '')
+        date_of_birth = data.get('Date of birth', '')
+        sex = data.get('Sex', '')
+    else:
+        ranking_id = country = city = date_of_birth = sex = ''
+
+    return {
+        'PlayerID': player_id,
+        'Name': name,
+        'RankingID': ranking_id,
+        'Country': country,
+        'City': city,
+        'DateOfBirth': date_of_birth,
+        'Sex': sex
+    }
 
 def process_player(player_id: int) -> Optional[Dict[str, Any]]:
     """
@@ -40,45 +97,8 @@ def process_player(player_id: int) -> Optional[Dict[str, Any]]:
     try:
         session = get_thread_session()
         link = f"{BASE_URL}/eng/user/id/{player_id}/"
-        response = utils.get_with_status(session, link)
-        soup = BeautifulSoup(response.text, 'lxml')
-        
-        # Extract player name
-        name_element = soup.find('h1', id='header')
-        name = name_element.text.split(' - ')[-1] if name_element else ''
-        
-        # Extract information from the table
-        table = soup.find('table', class_='iTable')
-        
-        if table:
-            rows = table.find_all('tr')
-            data = {}
-            for row in rows:
-                cells = row.find_all(['th', 'td'])
-                if len(cells) == 2:
-                    key = cells[0].text.strip()
-                    value = cells[1].text.strip()
-                    data[key] = value
-            
-            # Extract specific data fields
-            ranking_match = re.search(r'ID\s*(\d+)', data.get('World ranking', ''))
-            ranking_id = ranking_match.group(1) if ranking_match else ''
-            country = data.get('Country', '')
-            city = data.get('City', '')
-            date_of_birth = data.get('Date of birth', '')
-            sex = data.get('Sex', '')
-        else:
-            ranking_id = country = city = date_of_birth = sex = ''
-        
-        return {
-            'PlayerID': player_id,
-            'Name': name,
-            'RankingID': ranking_id,
-            'Country': country,
-            'City': city,
-            'DateOfBirth': date_of_birth,
-            'Sex': sex
-        }
+        response = utils.get_with_status(session, link, timeout=PLAYER_PAGE_TIMEOUT)
+        return parse_player_page(player_id, response.text)
     except requests.RequestException as e:
         logging.warning(f"Request failed for player {player_id}: {e}")
         return None
@@ -119,7 +139,7 @@ def get_unique_player_ids(parquet_file_path: Path) -> List[int]:
 def scrape_all_players(
     player_ids: List[int],
     output_file: Path = DATA_DIR / "players_data.csv",
-    max_workers: int = 10,
+    max_workers: int = DEFAULT_WORKERS,
     refresh_existing: bool = False,
 ) -> pd.DataFrame:
     """
@@ -194,7 +214,7 @@ def main():
     """Main execution function"""
     utils.setup_logging()
     parser = argparse.ArgumentParser(description="Scrape player profile data from player IDs in scraped matches.")
-    parser.add_argument("--workers", type=int, default=10, help="Parallel workers for player profile pages.")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Parallel workers for player profile pages.")
     parser.add_argument("--refresh-existing", action="store_true", help="Re-scrape all players, not just new or blank rows.")
     args = parser.parse_args()
 
