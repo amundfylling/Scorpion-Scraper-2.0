@@ -43,7 +43,14 @@ python scorpion_scraper/scrape_tournament_urls.py --pages 10 --workers 8
 python scorpion_scraper/scrape_matches.py --workers 12 --refresh-recent-days 30
 python scorpion_scraper/scrape_matches.py --recheck-empty
 python scorpion_scraper/scrape_players.py --workers 5 --refresh-existing
+python scorpion_scraper/scrape_player_ranking.py 655257          # one player's ranking history
+python scorpion_scraper/scrape_player_ranking.py --output rankings.parquet  # every RankingID in players_data.csv
 ```
+
+`scrape_player_ranking.scrape_player_ranking(url)` returns one player's ITHF
+ranking history as `year`, `month`, `rank`, `points`;
+`scrape_player_rankings(ids)` fetches many players in parallel and adds a
+`RankingID` column.
 
 Incremental match scraping re-scrapes tournaments from the last 14 days by
 default, then replaces those old tournament rows. This catches late score
