@@ -6,7 +6,7 @@ import pandas as pd
 
 from bs4 import BeautifulSoup
 
-from scorpion_scraper import scrape_matches, scrape_players, tournament_metadata
+from scorpion_scraper import scrape_matches, scrape_player_ranking, scrape_players, tournament_metadata
 
 
 def soup(html):
@@ -350,6 +350,41 @@ class PlayerParserTests(unittest.TestCase):
             "PlayerID": 1, "Name": "", "RankingID": "", "Country": "",
             "City": "", "DateOfBirth": "", "Sex": "",
         })
+
+
+class RankingParserTests(unittest.TestCase):
+    HTML = """
+    <html><body><form>
+    <span id="LabRank"><table border="1"><tr><td>&nbsp;</td><td><table><tr>
+      <td class="PlayerB">Jan.</td><td class="PlayerB">Feb.</td><td class="PlayerB">March</td>
+    </tr></table></td></tr>
+    <tr><td class="PlayerB">2010</td><td><table><tr>
+      <td class="Player">-</td>
+      <td class="Player">2392.<br><a href="history.aspx?id=250">20</a></td>
+      <td class="Player">1593.<br><a href="history.aspx?id=251">77</a></td>
+    </tr></table></td></tr>
+    <tr><td class="PlayerB">2011</td><td><table><tr>
+      <td class="Player">990.<br><a href="history.aspx?id=261">398</a></td>
+      <td class="Player">&nbsp;</td><td class="Player">&nbsp;</td>
+    </tr></table></td></tr>
+    </table></span>
+    </form></body></html>
+    """
+
+    def test_history_table(self):
+        df = scrape_player_ranking.parse_player_ranking(self.HTML)
+
+        self.assertEqual(list(df.columns), scrape_player_ranking.RANKING_COLUMNS)
+        self.assertEqual(df["year"].tolist(), [2010] * 3 + [2011] * 3)
+        # Month labels line up with their own cells (January is the first cell).
+        self.assertEqual(df["month"].tolist(), ["Jan", "Feb", "March"] * 2)
+        self.assertEqual(df["rank"].tolist()[1:4], [2392, 1593, 990])
+        self.assertEqual(df["points"].tolist()[1:4], [20, 77, 398])
+        self.assertTrue(df.loc[[0, 4, 5], ["rank", "points"]].isna().all().all())
+
+    def test_page_without_ranking_table(self):
+        with self.assertRaises(ValueError):
+            scrape_player_ranking.parse_player_ranking("<html><body><p>Unknown player</p></body></html>")
 
 
 if __name__ == "__main__":
