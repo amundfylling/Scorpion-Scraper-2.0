@@ -16797,10 +16797,6 @@ TournamentID,StageID,StageSequence,StageURL
 643,2135,2,https://th.sportscorpion.com/eng/tournament/stage/2135/matches/?print
 642,2129,1,https://th.sportscorpion.com/eng/tournament/stage/2129/matches/?print
 642,2130,2,https://th.sportscorpion.com/eng/tournament/stage/2130/matches/?print
-644,2131,1,https://th.sportscorpion.com/eng/tournament/stage/2131/matches/?print
-644,2132,2,https://th.sportscorpion.com/eng/tournament/stage/2132/matches/?print
-644,2136,3,https://th.sportscorpion.com/eng/tournament/stage/2136/matches/?print
-644,2137,4,https://th.sportscorpion.com/eng/tournament/stage/2137/matches/?print
 639,2138,1,https://th.sportscorpion.com/eng/tournament/stage/2138/matches/?print
 639,2141,2,https://th.sportscorpion.com/eng/tournament/stage/2141/matches/?print
 639,2145,3,https://th.sportscorpion.com/eng/tournament/stage/2145/matches/?print
@@ -18912,3 +18908,9 @@ TournamentID,StageID,StageSequence,StageURL
 8378,24264,3,https://th.sportscorpion.com/eng/tournament/stage/24264/matches/?print
 8389,24276,1,https://th.sportscorpion.com/eng/tournament/stage/24276/matches/?print
 8388,24272,2,https://th.sportscorpion.com/eng/tournament/stage/24272/matches/?print
+8391,24286,2,https://th.sportscorpion.com/eng/tournament/stage/24286/matches/?print
+8387,24273,2,https://th.sportscorpion.com/eng/tournament/stage/24273/matches/?print
+8387,24274,3,https://th.sportscorpion.com/eng/tournament/stage/24274/matches/?print
+8387,24275,4,https://th.sportscorpion.com/eng/tournament/stage/24275/matches/?print
+644,2131,1,https://th.sportscorpion.com/eng/tournament/stage/2131/matches/?print
+644,2136,2,https://th.sportscorpion.com/eng/tournament/stage/2136/matches/?print
