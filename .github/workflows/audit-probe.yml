@@ -8,6 +8,11 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [dates, forfeits, playoffs]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,4 +22,6 @@ jobs:
           python-version: '3.x'
           cache: 'pip'
       - run: pip install -r requirements.txt
-      - run: python scripts/audit_probe.py
+      - run: timeout 30m python -u scripts/audit_probe.py ${{ matrix.part }}
+        env:
+          PROBE_LIMIT: '120'

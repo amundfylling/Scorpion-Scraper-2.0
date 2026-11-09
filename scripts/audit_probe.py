@@ -4,6 +4,7 @@ and print what the markup shows. Run from GitHub Actions (the site is not
 reachable from every network).
 """
 import collections
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -21,8 +22,21 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 DATE_RE = re.compile(r"\d{2}\.\d{2}\.\d{2,4}")
 
 
+import time
+import requests
+
+_SESSION = requests.Session()
+_SESSION.headers.update(utils.DEFAULT_HEADERS)
+
+
 def get(url):
-    return utils.get_with_status(utils.get_thread_session(), url, timeout=40).text
+    t = time.time()
+    try:
+        r = _SESSION.get(url, timeout=30)
+        r.raise_for_status()
+        return r.text
+    finally:
+        print(f"    [fetch {time.time() - t:5.1f}s] {url}", flush=True)
 
 
 def html_of(el, limit=600):
@@ -106,6 +120,12 @@ def probe_playoffs():
     section("PLAYOFF GAPS")
     gaps = gap_series()
     print("gap series:", len(gaps), "stages:", gaps.StageID.nunique())
+    limit = int(os.environ.get("PROBE_LIMIT", "0") or 0)
+    if limit:
+        keep = set(gaps[gaps.StageID == 20093].index)
+        keep |= set(gaps.sample(n=min(limit, len(gaps)), random_state=1).index)
+        gaps = gaps.loc[sorted(keep)]
+        print("sampled gap series:", len(gaps))
     pages = {}
 
     def load(stage_id):
@@ -114,7 +134,7 @@ def probe_playoffs():
         except Exception as exc:
             return stage_id, exc
 
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         for sid, text in ex.map(load, sorted(gaps.StageID.unique())):
             pages[sid] = text
 
@@ -204,7 +224,8 @@ def probe_forfeits():
 
 
 if __name__ == "__main__":
-    for fn in (probe_dates, probe_forfeits, probe_playoffs):
+    wanted = sys.argv[1:] or ["dates", "forfeits", "playoffs"]
+    for fn in [globals()["probe_" + name] for name in wanted]:
         try:
             fn()
         except Exception as exc:
