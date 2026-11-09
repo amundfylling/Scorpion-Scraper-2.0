@@ -25,6 +25,7 @@ jobs:
           python-version: '3.x'
           cache: 'pip'
       - run: pip install -r requirements.txt
-      - run: timeout 35m python -u scripts/audit_probe.py ${{ inputs.parts }}
+      - run: timeout 35m python -u scripts/audit_probe.py
         env:
+          PROBE_PARTS: ${{ inputs.parts }}
           PROBE_LIMIT: ${{ inputs.limit }}

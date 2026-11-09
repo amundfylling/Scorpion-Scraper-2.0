@@ -224,8 +224,12 @@ def probe_forfeits():
 
 
 if __name__ == "__main__":
-    wanted = sys.argv[1:] or ["dates", "forfeits", "playoffs"]
-    for fn in [globals()["probe_" + name] for name in wanted]:
+    probes = {"dates": probe_dates, "forfeits": probe_forfeits, "playoffs": probe_playoffs}
+    wanted = sys.argv[1:] or os.environ.get("PROBE_PARTS", "").split() or list(probes)
+    unknown = [name for name in wanted if name not in probes]
+    if unknown:
+        sys.exit(f"Unknown probe part(s): {', '.join(unknown)}; choose from {', '.join(probes)}")
+    for fn in [probes[name] for name in wanted]:
         try:
             fn()
         except Exception as exc:
