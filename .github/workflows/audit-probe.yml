@@ -1,0 +1,20 @@
+name: Audit probe
+
+on:
+  push:
+    branches: [claude/project-thread-yg4dof]
+    paths: [scripts/audit_probe.py, .github/workflows/audit-probe.yml]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python scripts/audit_probe.py
