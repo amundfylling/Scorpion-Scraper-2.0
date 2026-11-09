@@ -1,0 +1,31 @@
+name: Audit probe
+
+# Manual check of th.sportscorpion.com markup for the H2H data-audit questions
+# (end dates, playoff gaps, forfeits). Prints findings to the job log.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "Space-separated parts: dates forfeits playoffs"
+        default: "dates forfeits playoffs"
+      limit:
+        description: "Max playoff gap series to sample (0 = all)"
+        default: "120"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: timeout 35m python -u scripts/audit_probe.py
+        env:
+          PROBE_PARTS: ${{ inputs.parts }}
+          PROBE_LIMIT: ${{ inputs.limit }}

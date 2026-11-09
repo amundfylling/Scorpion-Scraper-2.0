@@ -389,3 +389,49 @@ class RankingParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuditFixTests(unittest.TestCase):
+    def test_end_date_kept_when_plausible(self):
+        self.assertEqual(tournament_metadata.sanitize_end_date("2025-08-19", "2025-08-19"), "2025-08-19")
+        self.assertEqual(tournament_metadata.sanitize_end_date("2025-08-19", "2025-08-26"), "2025-08-26")
+
+    def test_end_date_dropped_when_before_start_or_too_late(self):
+        self.assertEqual(tournament_metadata.sanitize_end_date("2022-02-18", "2022-01-18"), "")
+        self.assertEqual(tournament_metadata.sanitize_end_date("2016-04-23", "2023-01-22"), "")
+        self.assertEqual(tournament_metadata.sanitize_end_date("2025-08-19", "2025-08-27"), "")
+        self.assertEqual(tournament_metadata.sanitize_end_date("2025-08-19", ""), "")
+
+    def test_metadata_parser_applies_end_date_rule(self):
+        html = """
+        <h1 id="header">Edited Cup</h1>
+        <table class="iTable">
+          <tr><th>Date of the tournament</th><td>23.04.2016</td></tr>
+          <tr><th>Date of the end of the tournament</th><td>22.01.2023</td></tr>
+        </table>
+        """
+        row = tournament_metadata.parse_tournament_metadata(
+            soup(html), "https://th.sportscorpion.com/eng/tournament/id/1372/"
+        )
+        self.assertEqual(row["Date"], "2016-04-23")
+        self.assertEqual(row["EndDate"], "")
+
+    def test_skipped_playoff_cells_are_counted(self):
+        scrape_matches.SKIPPED_PLAYOFF_CELLS.clear()
+        html = """
+        <div class="subheader">Semi-final</div>
+        <div class="gr_match"><table>
+          <tr class="series-container">
+            <td class="ma_name1"><a href="/eng/user/id/1366/">A</a></td>
+            <td class="ma_name2"><a href="/eng/user/id/1800/">B</a></td>
+            <td class="ma_result_xb" data-match-id="1">2 : 1</td>
+            <td class="ma_result_xb" data-match-id="2">?</td>
+            <td class="ma_result_x0" data-match-id="3"></td>
+          </tr>
+        </table></div>
+        """
+        rows = scrape_matches.parse_individual_stage_matches(page(html), "stage-url")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(scrape_matches.SKIPPED_PLAYOFF_CELLS["unparsed"], 1)
+        self.assertEqual(scrape_matches.SKIPPED_PLAYOFF_CELLS["empty"], 1)
+        scrape_matches.SKIPPED_PLAYOFF_CELLS.clear()

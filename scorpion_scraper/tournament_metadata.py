@@ -61,6 +61,10 @@ INFO_FIELD_MAP = {
 
 DATE_FIELDS = {"Date", "EndDate"}
 DATETIME_FIELDS = {"RegistrationStart", "RegistrationEnd"}
+# SportScorpion's "Date of the end of the tournament" is often a later edit
+# date (years after the event) or even earlier than the start date. An end date
+# outside [Date, Date + MAX_END_DATE_SPAN_DAYS] is treated as unknown.
+MAX_END_DATE_SPAN_DAYS = 7
 INT_FIELDS = {"TournamentID", "Level", "Participants", "MaxParticipants"}
 FLOAT_FIELDS = {"SWRMultiplier"}
 
@@ -117,6 +121,27 @@ def normalize_metadata_value(field: str, value: str) -> str:
         return _first_float(value)
     return value
 
+def sanitize_end_date(start: str, end: str, max_span_days: int = MAX_END_DATE_SPAN_DAYS) -> str:
+    """
+    Return ``end`` (YYYY-MM-DD) when it is a plausible end date for a
+    tournament that starts on ``start``, otherwise "".
+    """
+    end = (end or "").strip()
+    if not end:
+        return ""
+    try:
+        end_date = datetime.strptime(end, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    try:
+        start_date = datetime.strptime((start or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        return end
+    span = (end_date - start_date).days
+    if span < 0 or span > max_span_days:
+        return ""
+    return end
+
 def parse_tournament_metadata(
     soup,
     detail_url: str,
@@ -145,6 +170,8 @@ def parse_tournament_metadata(
             row[field] = normalize_metadata_value(field, raw_value)
         else:
             extras[label] = raw_value
+
+    row["EndDate"] = sanitize_end_date(row["Date"], row["EndDate"])
 
     row["ExtraMetadataJson"] = json.dumps(extras, ensure_ascii=False, sort_keys=True) if extras else ""
     return row
