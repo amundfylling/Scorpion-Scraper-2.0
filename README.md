@@ -34,6 +34,7 @@ Run the desired scraper script from the `scorpion_scraper` directory. For exampl
 python3 scorpion_scraper/scrape_matches.py
 python scorpion_scraper/scrape_players.py
 python scorpion_scraper/scrape_tournament_urls.py
+python scorpion_scraper/scrape_ranking_history.py
 ```
 
 Useful options:
