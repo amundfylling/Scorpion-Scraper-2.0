@@ -162,6 +162,26 @@ class AuditTests(unittest.TestCase):
         mismatch = issues[issues["Check"] == "score_mismatch"].iloc[0]
         self.assertEqual((mismatch["Official"], mismatch["Dataset"]), ("5:0", "4:0"))
 
+    def test_duplicate_player_account_is_remapped(self):
+        issues = self.run_audit([
+            (99, "Round-Robin", 21, 10, 1, 3),   # player 20 stored as 21
+            (99, "Round-Robin", 10, 21, 2, 2),
+            (99, "Round-Robin", 21, 30, 5, 0),
+            (98, "Round-Robin", 30, 10, 0, 4),
+        ])
+        self.assertEqual(issues["Check"].tolist(), ["player_id_differs"])
+        self.assertEqual((issues.iloc[0]["Official"], issues.iloc[0]["Dataset"]), (20, 21))
+
+    def test_mirrored_score_is_reported_as_reversed(self):
+        issues = self.run_audit([
+            (99, "Round-Robin", 10, 20, 3, 1),
+            (99, "Round-Robin", 10, 20, 2, 2),
+            (99, "Round-Robin", 20, 30, 0, 5),
+            (98, "Round-Robin", 30, 10, 0, 4),
+        ])
+        self.assertIn("score_reversed", issues["Check"].tolist())
+        self.assertNotIn("score_mismatch", issues["Check"].tolist())
+
     def test_stage_without_games_is_one_issue(self):
         issues = self.run_audit([(50, "Round-Robin", 1, 2, 1, 0)])
         self.assertEqual(issues["Check"].tolist(), ["stage_missing"])

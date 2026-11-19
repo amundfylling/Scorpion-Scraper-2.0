@@ -199,7 +199,11 @@ def parse_stage_table(html: str, stage_id: int, tournament_id: Optional[int] = N
 
 
 def scrape_stage(stage_id: int, tournament_id: Optional[int]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    response = utils.get_with_status(utils.get_thread_session(), table_url(stage_id), timeout=60)
+    response = utils.get_thread_session().get(table_url(stage_id), timeout=60)
+    if response.status_code == 404:
+        # Playoff stages have no table page.
+        return [], []
+    response.raise_for_status()
     return parse_stage_table(response.text, stage_id, tournament_id)
 
 

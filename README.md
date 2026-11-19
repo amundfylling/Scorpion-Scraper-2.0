@@ -98,6 +98,8 @@ were played in, and checks that they exist there. Each row of
 | `stage_missing` | The official table has games; the dataset has none for the stage |
 | `game_missing` / `game_extra` | A game is only in the official table / only in the dataset |
 | `score_mismatch` | Same two players, different score |
+| `score_reversed` | Same two players, mirrored score (the site shows some walkovers the other way round on the two pages) |
+| `player_id_differs` | The games are stored under a different player ID than the table lists (duplicate accounts on the site) |
 | `player_not_in_table` | A player has games in the dataset but is not in the table |
 | `totals_mismatch` | G/W/D/L/goals computed from the dataset differ from the official row |
 | `points_mismatch` | Totals agree, but points don't follow the stage's points rule (inferred per stage, e.g. 2-1-0 or 3-1-0); usually a penalty or bonus |

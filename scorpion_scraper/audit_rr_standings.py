@@ -16,6 +16,10 @@ Checks for individual stages:
   games) differ from the official row
 * ``points_mismatch``    - totals agree but points don't follow the stage's
   points rule (usually a penalty or bonus in the official table)
+* ``score_reversed``     - same pair, the score is mirrored (seen on walkovers)
+* ``player_id_differs``  - the games are stored under another player ID than the
+  table lists (duplicate accounts on the site); the audit continues with the
+  table's ID
 * ``transferred_not_found`` - a game marked "Transferred result" is not in any
   other stage of the same tournament in the dataset
 
@@ -119,6 +123,53 @@ def diff_games(official: List[Tuple[int, int, int, int]], dataset: List[Tuple[in
     return missing, extra, mismatched
 
 
+def _can_transfer_from(source: Tuple[int, Optional[int], str], stage_id: int, sequence: Optional[int]) -> bool:
+    """
+    Results are carried over from another round robin stage, or from any
+    stage that comes earlier in the tournament (some preliminary rounds are
+    laid out as playoff series). Later playoff games are not a source.
+    """
+    source_id, source_sequence, source_stage = source
+    if source_id == stage_id:
+        return False
+    if source_stage == "Round-Robin":
+        return True
+    return source_sequence is not None and sequence is not None and source_sequence < sequence
+
+
+def remap_player_ids(
+    official: List[Tuple[int, int, int, int]],
+    dataset: List[Tuple[int, int, int, int]],
+    listed: set,
+) -> Dict[int, int]:
+    """
+    Find players whose games carry a different player ID in the dataset than
+    in the official table (the site sometimes lists a duplicate account in
+    one of the two). A dataset-only player maps to a table-only player when
+    renaming makes their games match exactly.
+    """
+    dataset_players = {p for key in dataset for p in key[:2]}
+    official_players = {p for key in official for p in key[:2]}
+    extra_players = dataset_players - listed
+    unmatched_table = (official_players | listed) - dataset_players
+    mapping: Dict[int, int] = {}
+    official_counter = Counter(official)
+    for old in sorted(extra_players):
+        old_games = [k for k in dataset if old in k[:2]]
+        for new in sorted(unmatched_table - set(mapping.values())):
+            renamed = [_key(new if a == old else a, new if b == old else b, x, y) for a, b, x, y in old_games]
+            if not Counter(renamed) - official_counter:
+                mapping[old] = new
+                break
+    return mapping
+
+
+def _apply_mapping(keys: List[Tuple[int, int, int, int]], mapping: Dict[int, int]) -> List[Tuple[int, int, int, int]]:
+    if not mapping:
+        return keys
+    return [_key(mapping.get(a, a), mapping.get(b, b), x, y) for a, b, x, y in keys]
+
+
 def _score(key: Tuple[int, int, int, int]) -> str:
     return f"{key[2]}:{key[3]}"
 
@@ -152,18 +203,21 @@ def audit(
 
     # Dataset games per stage and per tournament.
     stage_games: Dict[int, List[Tuple[int, int, int, int]]] = defaultdict(list)
+    # tournament -> game key -> {(stage id, stage sequence, stage type)}
     tournament_games: Dict[int, Dict[Tuple[int, int, int, int], set]] = defaultdict(lambda: defaultdict(set))
     stage_team_matches: Dict[int, set] = defaultdict(set)
     valid = matches.dropna(subset=["Player1ID", "Player2ID"])
-    for sid, tid, p1, p2, g1, g2, tm, stage in zip(
+    stage_sequence: Dict[int, int] = {}
+    for sid, tid, p1, p2, g1, g2, tm, stage, seq in zip(
         valid["StageID"], valid["TournamentID"], valid["Player1ID"], valid["Player2ID"],
         valid["GoalsPlayer1"], valid["GoalsPlayer2"], valid["TeamMatchID"], valid["Stage"],
+        valid["StageSequence"] if "StageSequence" in valid else [None] * len(valid),
     ):
         key = _key(p1, p2, g1, g2)
         stage_games[int(sid)].append(key)
-        if stage == "Round-Robin":
-            # Results are only transferred between round robin stages.
-            tournament_games[int(tid)][key].add(int(sid))
+        seq = int(seq) if pd.notna(seq) else None
+        stage_sequence[int(sid)] = seq
+        tournament_games[int(tid)][key].add((int(sid), seq, stage))
         if pd.notna(tm):
             stage_team_matches[int(sid)].add(int(tm))
     stage_names = {
@@ -210,6 +264,14 @@ def audit(
             add("stage_missing", sid, tid, Official=len(official), Dataset=0, Detail="stage has no games in the dataset")
             continue
 
+        listed = set(rows["EntryID"].dropna().astype(int))
+        mapping = remap_player_ids(official, dataset, listed)
+        for old, new in mapping.items():
+            add("player_id_differs", sid, tid, Group=group_of.get(new), EntryID=new, Name=name_of.get(new),
+                Official=new, Dataset=old,
+                Detail=f"games are stored under player {old} ({name_of.get(old)}); the table lists player {new}")
+        dataset = _apply_mapping(dataset, mapping)
+
         # Transferred games normally live in an earlier stage of the same
         # tournament. Some matches pages list them in this stage instead; a
         # transferred game found only here is accounted for here.
@@ -219,7 +281,9 @@ def audit(
             if pd.isna(a) or pd.isna(b):
                 continue
             key = _key(a, b, x, y)
-            in_other_stage = tid is not None and bool(tournament_games[tid].get(key, set()) - {sid})
+            in_other_stage = tid is not None and any(
+                _can_transfer_from(source, sid, stage_sequence.get(sid)) for source in tournament_games[tid].get(key, ())
+            )
             if not in_other_stage and remaining[key] > 0:
                 remaining[key] -= 1
                 continue
@@ -238,13 +302,14 @@ def audit(
                 OpponentID=key[1], Opponent=name_of.get(key[1]), Dataset=_score(key),
                 Detail="same player on both sides" if key[0] == key[1] else None)
         for off_key, data_key in mismatched:
-            add("score_mismatch", sid, tid, Group=group_of.get(off_key[0]), EntryID=off_key[0], Name=name_of.get(off_key[0]),
-                OpponentID=off_key[1], Opponent=name_of.get(off_key[1]), Official=_score(off_key), Dataset=_score(data_key))
+            reversed_score = off_key[2:] == data_key[:1:-1]
+            add("score_reversed" if reversed_score else "score_mismatch", sid, tid, Group=group_of.get(off_key[0]), EntryID=off_key[0], Name=name_of.get(off_key[0]),
+                OpponentID=off_key[1], Opponent=name_of.get(off_key[1]), Official=_score(off_key), Dataset=_score(data_key),
+                Detail="the matches page and the table show this result the other way round" if reversed_score else None)
 
         # Player totals: dataset games of this stage + transferred games kept elsewhere.
         totals = player_totals(dataset + moved_elsewhere)
         rule = infer_point_rule(rows)
-        listed = set(rows["EntryID"].dropna().astype(int))
         for player in sorted(set(totals) - listed):
             add("player_not_in_table", sid, tid, EntryID=player, Name=name_of.get(player), Dataset=totals[player]["G"],
                 Detail="player has games in the dataset but is not in the official table")
