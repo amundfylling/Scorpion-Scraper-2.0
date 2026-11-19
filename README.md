@@ -68,6 +68,44 @@ the aggregate team score is skipped and only the individual games are saved.
 Run `scrape_tournament_urls.py --full --refresh-existing` before a full match
 scrape to refresh tournament metadata and stage caches used for faster scraping.
 
+## Round robin standings audit
+
+`scrape_rr_tables.py` scrapes the official standings table ("Detailed tables")
+of every round robin stage, and `audit_rr_standings.py` compares it with the
+games in `scraped_matches.parquet` to catch missing games, wrong scores and
+parsing errors.
+
+```bash
+python scorpion_scraper/scrape_rr_tables.py              # incremental: new, recent and newly finished stages
+python scorpion_scraper/scrape_rr_tables.py --full       # every stage again
+python scorpion_scraper/scrape_rr_tables.py --stage 4696 # one stage
+python scorpion_scraper/audit_rr_standings.py            # writes data/rr_audit_mismatches.csv
+```
+
+The scraper writes `data/rr_standings.parquet` (one row per stage, group and
+player or team), `data/rr_table_games.parquet` (every game in the cross tables,
+once per pair) and `data/rr_table_stages.csv` (which stages were scraped and
+whether they had a table). Besides the round robin stages in the dataset it
+also checks cached stages that have no games at all.
+
+Later stages often include games carried over from an earlier stage, marked
+"Transferred result" on the site. The audit counts those against the stage they
+were played in, and checks that they exist there. Each row of
+`rr_audit_mismatches.csv` is one problem:
+
+| Check | Meaning |
+| --- | --- |
+| `stage_missing` | The official table has games; the dataset has none for the stage |
+| `game_missing` / `game_extra` | A game is only in the official table / only in the dataset |
+| `score_mismatch` | Same two players, different score |
+| `player_not_in_table` | A player has games in the dataset but is not in the table |
+| `totals_mismatch` | G/W/D/L/goals computed from the dataset differ from the official row |
+| `points_mismatch` | Totals agree, but points don't follow the stage's points rule (inferred per stage, e.g. 2-1-0 or 3-1-0); usually a penalty or bonus |
+| `transferred_not_found` | A transferred game is not in any round robin stage of the tournament |
+| `team_match_missing` / `team_match_extra` / `team_stage_missing` | Team stages: a team match in the table has no player games in the dataset, or the reverse |
+
+Both scripts also run at the end of `nightly_scrape.py`.
+
 To execute the scrapers in the required order (tournaments → matches → players),
 run the helper script:
 
