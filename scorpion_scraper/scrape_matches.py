@@ -10,7 +10,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 from pathlib import Path
 import logging
 import argparse
+import collections
 import queue
+import threading
 
 try:
     from . import utils
@@ -68,6 +70,18 @@ PLAYOFF_STAGE_MAP = {
 # Tournament status that means results will no longer change. Anything else
 # ("Finished *", "Is being conducted *", "Registration ...") can still change.
 FINAL_STATUS = "Finished"
+
+# Playoff game cells that were not saved, by reason. Logged after each scrape
+# so gaps in PlayoffGameNumber can be explained (unplayed game vs. a score
+# format the parser does not understand).
+SKIPPED_PLAYOFF_CELLS: "collections.Counter[str]" = collections.Counter()
+_SKIPPED_LOCK = threading.Lock()
+
+def _count_skipped(reason: str, cell=None) -> None:
+    with _SKIPPED_LOCK:
+        SKIPPED_PLAYOFF_CELLS[reason] += 1
+    if cell is not None and reason == 'unparsed':
+        logging.debug("Unparsed playoff score %r in match %s", element_text(cell), cell.get('data-match-id'))
 
 USER_ID_RE = re.compile(r'/user/id/(\d+)/')
 TEAM_ID_RE = re.compile(r'/team/id/(\d+)/')
@@ -343,6 +357,7 @@ def parse_individual_stage_matches(root, url: str) -> List[Dict[str, Any]]:
             for game_number, score in enumerate(_series_game_cells(serie), start=1):
                 parsed_score = parse_score_cell(score)
                 if not parsed_score:
+                    _count_skipped('unparsed' if element_text_stripped(score) else 'empty', score)
                     continue
                 goals_player_1, goals_player_2, overtime, walkover = parsed_score
                 match_info.append({
@@ -808,8 +823,17 @@ def get_tournament_matches(
                    inplace=True, na_position='last')
 
     # Remove playoff draws
-    df = df[~((df['TournamentType'] != 'Team') & (df['Stage'] == 'Playoff') & (df['GoalsPlayer1'] == df['GoalsPlayer2']))]
+    playoff_draws = (df['TournamentType'] != 'Team') & (df['Stage'] == 'Playoff') & (df['GoalsPlayer1'] == df['GoalsPlayer2'])
+    if playoff_draws.any():
+        with _SKIPPED_LOCK:
+            SKIPPED_PLAYOFF_CELLS['draw'] += int(playoff_draws.sum())
+    df = df[~playoff_draws]
     df.reset_index(drop=True, inplace=True)
+    if SKIPPED_PLAYOFF_CELLS:
+        logging.info(
+            "Playoff game cells not saved: %s",
+            ", ".join(f"{reason}={count}" for reason, count in sorted(SKIPPED_PLAYOFF_CELLS.items())),
+        )
 
     return df
 
